@@ -34,6 +34,7 @@
                   "deployment/self-hosted/docker-compose",
                   "deployment/self-hosted/kubernetes",
                   "deployment/self-hosted/cloudformation",
+                  "deployment/self-hosted/clovermeds-managed",
                   "deployment/self-hosted/dittofeed-ee",
                   "deployment/self-hosted/auth-modes",
                   {

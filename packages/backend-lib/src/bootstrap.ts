@@ -481,10 +481,9 @@ async function insertDefaultEvents({ workspaceId }: { workspaceId: string }) {
 
 function handleErrorFactory(message: string) {
   return function handleError(e: unknown) {
-    const error = e as Error;
-    logger().error({ err: error }, message);
+    logger().error({ err: e }, message);
     if (config().bootstrapSafe) {
-      throw error;
+      throw e;
     }
   };
 }
@@ -587,13 +586,21 @@ async function waitForNamespaceAvailable(
 }
 
 export async function bootstrapTemporalNamespace(): Promise<void> {
-  const { temporalNamespace } = config();
+  const { temporalApiKey, temporalNamespace } = config();
 
   // Skip if using the default namespace (it always exists)
   if (temporalNamespace === DEFAULT_NAMESPACE) {
     logger().debug(
       { namespace: temporalNamespace },
       "Using default Temporal namespace, skipping namespace bootstrap.",
+    );
+    return;
+  }
+
+  if (temporalApiKey) {
+    logger().info(
+      { namespace: temporalNamespace },
+      "Temporal API key configured, skipping namespace bootstrap.",
     );
     return;
   }

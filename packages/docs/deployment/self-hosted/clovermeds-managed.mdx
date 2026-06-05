@@ -1,0 +1,69 @@
+---
+title: CloverMeds Managed AWS Deployment
+---
+
+This page documents the CloverMeds fork deployment mode for running Dittofeed
+against existing Pulumi-managed infrastructure rather than the bundled local
+Postgres, ClickHouse, and Temporal services.
+
+## Managed Dependency Expectations
+
+CloverMeds production deployments use existing managed services:
+
+- Postgres is an existing RDS database.
+- ClickHouse is an existing managed ClickHouse service.
+- Temporal is Temporal Cloud.
+- Secrets are provided by the deployment environment.
+
+The bootstrap path is still Dittofeed's real bootstrap path. It runs Postgres
+migrations, creates or repairs ClickHouse databases and tables idempotently,
+upserts workspace/default resources/providers/templates, and starts or reuses
+compute/global cron workflows safely.
+
+Do not patch compiled JavaScript files after image build. Temporal Cloud
+connection settings are handled in source through the environment variables
+below.
+
+## Environment Variables
+
+| Variable                      | Value                                              | Notes                                                                                                                                     |
+| ----------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_BOOTSTRAP_MODE`     | `create`, `prefer-existing`, or `require-existing` | Defaults to `create`, which preserves upstream behavior.                                                                                  |
+| `TEMPORAL_API_KEY`            | Temporal Cloud API key                             | Enables API-key authenticated Temporal Cloud connections with TLS.                                                                        |
+| `TEMPORAL_TLS_CA`             | PEM CA bundle                                      | Optional CA bundle for Temporal TLS verification. If omitted while `TEMPORAL_API_KEY` is set, TLS is enabled with the system trust store. |
+| `TEMPORAL_NAMESPACE`          | Temporal Cloud namespace                           | Used for client namespace configuration and Temporal Cloud namespace metadata.                                                            |
+| `JOURNEY_TRIGGER_DIAGNOSTICS` | `true` or `false`                                  | Temporary sanitized journey trigger diagnostics. Defaults to `false`.                                                                     |
+| `BOOTSTRAP_EVENTS`            | `false`                                            | Required for CloverMeds production; demo/default events must not be seeded.                                                               |
+
+## Postgres Bootstrap Modes
+
+`create` preserves upstream behavior. Bootstrap may connect to the maintenance
+database and create the configured database if it is missing, then run
+migrations.
+
+`prefer-existing` first connects directly to the configured database. If it
+exists, bootstrap skips the create-database step and runs migrations. If it is
+missing, bootstrap falls back to the upstream create behavior.
+
+`require-existing` is the CloverMeds production mode. Bootstrap connects
+directly to `DATABASE_NAME` or the database name from `DATABASE_URL` and fails
+clearly if it is missing. This mode does not require `CREATE DATABASE`
+privileges because it never attempts to create the database.
+
+## Temporal Cloud
+
+Set `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, and `TEMPORAL_API_KEY` for
+Temporal Cloud. When `TEMPORAL_API_KEY` is present, Dittofeed enables TLS,
+sends the API key through the Temporal SDK API-key option, includes namespace
+metadata, and skips namespace bootstrap because Temporal Cloud namespaces are
+managed outside the application.
+
+## Journey Trigger Diagnostics
+
+`JOURNEY_TRIGGER_DIAGNOSTICS=true` enables temporary logs for event-entry
+journey triggering. The diagnostics include event type/name, workspace ID,
+journey ID/name/status, entry node type and configured event or segment,
+event-name match result, and `signalWithStart` success/failure.
+
+Diagnostics do not log user traits, raw message bodies, email, phone, name, or
+PHI. Disable this flag after the journey-triggering investigation is complete.

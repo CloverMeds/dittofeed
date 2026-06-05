@@ -2,11 +2,51 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import fs from "fs/promises";
 import path from "path";
 import { Client } from "pg";
-import { PostgresError } from "pg-error-enum";
 
 import config, { databaseUrlWithoutName } from "./config";
 import { db } from "./db";
 import logger from "./logger";
+
+const DUPLICATE_DATABASE_CODE = "42P04";
+const INVALID_CATALOG_NAME_CODE = "3D000";
+
+export const PostgresBootstrapMode = {
+  Create: "create",
+  PreferExisting: "prefer-existing",
+  RequireExisting: "require-existing",
+} as const;
+
+export type PostgresBootstrapMode =
+  (typeof PostgresBootstrapMode)[keyof typeof PostgresBootstrapMode];
+
+interface DatabaseBootstrapPlan {
+  createDatabase: boolean;
+  requireExisting: boolean;
+  checkExistingFirst?: boolean;
+}
+
+export function getDatabaseBootstrapPlan(
+  mode: PostgresBootstrapMode,
+): DatabaseBootstrapPlan {
+  switch (mode) {
+    case PostgresBootstrapMode.Create:
+      return {
+        createDatabase: true,
+        requireExisting: false,
+      };
+    case PostgresBootstrapMode.PreferExisting:
+      return {
+        createDatabase: true,
+        requireExisting: false,
+        checkExistingFirst: true,
+      };
+    case PostgresBootstrapMode.RequireExisting:
+      return {
+        createDatabase: false,
+        requireExisting: true,
+      };
+  }
+}
 
 async function checkDirectory(p: string) {
   try {
@@ -15,6 +55,15 @@ async function checkDirectory(p: string) {
   } catch {
     return false;
   }
+}
+
+function getErrorCode(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return null;
+  }
+
+  const { code } = error;
+  return typeof code === "string" ? code : null;
 }
 
 async function createDatabase() {
@@ -26,19 +75,64 @@ async function createDatabase() {
       CREATE DATABASE ${database}
     `);
   } catch (e) {
-    const error = e as Error;
-    if (
-      "code" in error &&
-      typeof error.code === "string" &&
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-comparison
-      error.code === PostgresError.DUPLICATE_DATABASE
-    ) {
+    if (getErrorCode(e) === DUPLICATE_DATABASE_CODE) {
       logger().info({ database }, "Database already exists");
     } else {
-      throw error;
+      throw e;
     }
   } finally {
     await client.end();
+  }
+}
+
+function isMissingDatabaseError(error: unknown): boolean {
+  return getErrorCode(error) === INVALID_CATALOG_NAME_CODE;
+}
+
+async function configuredDatabaseExists(): Promise<boolean> {
+  const client = new Client(config().databaseUrl);
+  try {
+    await client.connect();
+    await client.query("SELECT 1");
+    return true;
+  } catch (e) {
+    if (isMissingDatabaseError(e)) {
+      return false;
+    }
+    throw e;
+  } finally {
+    await client.end();
+  }
+}
+
+async function requireConfiguredDatabase() {
+  const exists = await configuredDatabaseExists();
+  if (!exists) {
+    throw new Error(
+      `Postgres bootstrap mode require-existing requires configured database '${config().database}' to already exist. Create it before running migrations or use DATABASE_BOOTSTRAP_MODE=create.`,
+    );
+  }
+}
+
+async function bootstrapDatabaseForMigrations() {
+  const mode = config().databaseBootstrapMode;
+  const plan = getDatabaseBootstrapPlan(mode);
+
+  if (plan.requireExisting) {
+    await requireConfiguredDatabase();
+    return;
+  }
+
+  if (plan.checkExistingFirst && (await configuredDatabaseExists())) {
+    logger().info(
+      { database: config().database },
+      "Database already exists, skipping create database step",
+    );
+    return;
+  }
+
+  if (plan.createDatabase) {
+    await createDatabase();
   }
 }
 
@@ -73,6 +167,6 @@ export async function publicDrizzleMigrate() {
 }
 
 export async function drizzleMigrate() {
-  await createDatabase();
+  await bootstrapDatabaseForMigrations();
   await publicDrizzleMigrate();
 }

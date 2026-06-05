@@ -29,15 +29,19 @@ const BaseRawConfigProps = {
   databaseNameSuffix: Type.Optional(Type.String()),
   writeMode: Type.Optional(WriteMode),
   temporalAddress: Type.Optional(Type.String()),
+  temporalApiKey: Type.Optional(Type.String()),
   temporalConnectionTimeout: Type.Optional(
     Type.String({ format: "naturalNumber" }),
   ),
+  temporalTlsCa: Type.Optional(Type.String()),
   clickhouseHost: Type.String(),
   clickhouseProtocol: Type.Optional(Type.String()),
   clickhouseDatabase: Type.Optional(Type.String()),
   clickhouseUser: Type.String(),
   clickhousePassword: Type.String(),
-  defaultUserJourneyMaxAttempts: Type.Optional(Type.String({ format: "naturalNumber" })),
+  defaultUserJourneyMaxAttempts: Type.Optional(
+    Type.String({ format: "naturalNumber" }),
+  ),
   kafkaBrokers: Type.Optional(Type.String()),
   kafkaUsername: Type.Optional(Type.String()),
   kafkaPassword: Type.Optional(Type.String()),
@@ -50,9 +54,17 @@ const BaseRawConfigProps = {
   temporalNamespace: Type.Optional(Type.String()),
   logConfig: Type.Optional(BoolStr),
   bootstrap: Type.Optional(BoolStr),
+  databaseBootstrapMode: Type.Optional(
+    Type.Union([
+      Type.Literal("create"),
+      Type.Literal("prefer-existing"),
+      Type.Literal("require-existing"),
+    ]),
+  ),
   bootstrapEvents: Type.Optional(BoolStr),
   bootstrapWorker: Type.Optional(BoolStr),
   bootstrapSafe: Type.Optional(BoolStr),
+  journeyTriggerDiagnostics: Type.Optional(BoolStr),
   defaultIdUserPropertyId: Type.Optional(Type.String()),
   defaultAnonymousIdIdUserPropertyId: Type.Optional(Type.String()),
   defaultEmailUserPropertyId: Type.Optional(Type.String()),
@@ -280,6 +292,7 @@ export type Config = Overwrite<
     bootstrapEvents: boolean;
     bootstrapSafe: boolean;
     bootstrapWorker: boolean;
+    databaseBootstrapMode: "create" | "prefer-existing" | "require-existing";
     clickhouseDatabase: string;
     clickhouseHost: string;
     computedPropertiesActivityTaskQueue: string;
@@ -324,8 +337,10 @@ export type Config = Overwrite<
     signoutRedirectUrl: string;
     startOtel: boolean;
     temporalAddress: string;
+    temporalApiKey?: string;
     temporalNamespace: string;
     temporalConnectionTimeout?: number;
+    temporalTlsCa?: string;
     trackDashboard: boolean;
     useGlobalComputedProperties?: boolean;
     userEventsTopicName: string;
@@ -347,6 +362,7 @@ export type Config = Overwrite<
     clickhouseColdStorageMaxExecutionTime?: number;
     broadcastSendMessagesMaxAttempts: number;
     defaultGetSegmentAndEventDetailsMaxAttempts: number;
+    journeyTriggerDiagnostics: boolean;
   }
 > & {
   defaultUserEventsTableVersion: string;
@@ -367,6 +383,7 @@ export const SECRETS = new Set<keyof Config>([
   "hyperDxApiKey",
   "databaseUrl", // Contains password
   "dashboardWriteKey", // Potentially sensitive
+  "temporalApiKey",
 ]);
 
 const defaultDbParams: Record<string, string> = {
@@ -540,6 +557,14 @@ function parseRawConfig(rawConfig: RawConfig): Config {
     databaseParams,
   } = parseDatabaseUrl(rawConfig);
   const nodeEnv = rawConfig.nodeEnv ?? NodeEnvEnum.Development;
+  let defaultUserJourneyMaxAttempts: number | undefined;
+  if (rawConfig.defaultUserJourneyMaxAttempts !== undefined) {
+    defaultUserJourneyMaxAttempts = parseInt(
+      rawConfig.defaultUserJourneyMaxAttempts,
+    );
+  } else if (nodeEnv === NodeEnvEnum.Test) {
+    defaultUserJourneyMaxAttempts = 1;
+  }
   const writeMode: WriteMode =
     rawConfig.writeMode ??
     (rawConfig.nodeEnv === NodeEnvEnum.Test ? "ch-sync" : "ch-async");
@@ -643,6 +668,8 @@ function parseRawConfig(rawConfig: RawConfig): Config {
     userEventsTopicName:
       rawConfig.userEventsTopicName ?? "dittofeed-user-events",
     temporalNamespace: rawConfig.temporalNamespace ?? "default",
+    temporalApiKey: rawConfig.temporalApiKey,
+    temporalTlsCa: rawConfig.temporalTlsCa,
     temporalConnectionTimeout: rawConfig.temporalConnectionTimeout
       ? parseInt(rawConfig.temporalConnectionTimeout)
       : undefined,
@@ -794,13 +821,13 @@ function parseRawConfig(rawConfig: RawConfig): Config {
       rawConfig.broadcastSendMessagesMaxAttempts,
       5,
     ),
-    defaultUserJourneyMaxAttempts: rawConfig.defaultUserJourneyMaxAttempts !== undefined ? parseInt(
-      rawConfig.defaultUserJourneyMaxAttempts,
-    ) : (nodeEnv === NodeEnvEnum.Test ? 1 : undefined),
+    defaultUserJourneyMaxAttempts,
     defaultGetSegmentAndEventDetailsMaxAttempts: parseMaxAttempts(
       rawConfig.defaultGetSegmentAndEventDetailsMaxAttempts,
       nodeEnv === NodeEnvEnum.Test ? 1 : 10,
     ),
+    databaseBootstrapMode: rawConfig.databaseBootstrapMode ?? "create",
+    journeyTriggerDiagnostics: rawConfig.journeyTriggerDiagnostics === "true",
   };
 
   return parsedConfig;

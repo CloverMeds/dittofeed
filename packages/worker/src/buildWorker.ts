@@ -15,6 +15,7 @@ import logger from "backend-lib/src/logger";
 import { OpenTelemetry } from "backend-lib/src/openTelemetry";
 import * as activities from "backend-lib/src/temporal/activities";
 import { CustomActivityInboundInterceptor } from "backend-lib/src/temporal/activityInboundInterceptor";
+import { getTemporalNativeConnectionOptions } from "backend-lib/src/temporal/connectionOptions";
 import connectWorkflowCLient from "backend-lib/src/temporal/connectWorkflowClient";
 import workerLogger from "backend-lib/src/workerLogger";
 
@@ -24,9 +25,9 @@ export async function buildWorker(otel?: OpenTelemetry) {
   Runtime.install({ logger: workerLogger });
 
   const [connection, workflowClient] = await Promise.all([
-    NativeConnection.connect({
-      address: backendConfig().temporalAddress,
-    }),
+    NativeConnection.connect(
+      getTemporalNativeConnectionOptions(backendConfig()),
+    ),
     connectWorkflowCLient(),
   ]);
 
