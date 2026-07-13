@@ -25,7 +25,7 @@ import {
 } from "isomorphic-lib/src/deliveryHours";
 import { ChannelType, CompletionStatus } from "isomorphic-lib/src/types";
 import { enqueueSnackbar } from "notistack";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStorePick } from "../lib/appStore";
 import { noticeAnchorOrigin } from "../lib/notices";
@@ -183,6 +183,8 @@ export default function DeliveryHoursSettings({
 
   const workspaceId =
     workspace.type === CompletionStatus.Successful ? workspace.value.id : null;
+  const workspaceIdRef = useRef(workspaceId);
+  workspaceIdRef.current = workspaceId;
   const queryKey = [DELIVERY_HOURS_QUERY_KEY, workspaceId] as const;
 
   const deliveryHoursQuery = useQuery({
@@ -219,9 +221,14 @@ export default function DeliveryHoursSettings({
       );
       return response.data;
     },
-    onSuccess: (resource) => {
-      queryClient.setQueryData(queryKey, resource);
-      setDraft(draftFromResource(resource));
+    onSuccess: (resource, submittedResource) => {
+      queryClient.setQueryData(
+        [DELIVERY_HOURS_QUERY_KEY, submittedResource.workspaceId],
+        resource,
+      );
+      if (workspaceIdRef.current === submittedResource.workspaceId) {
+        setDraft(draftFromResource(resource));
+      }
       enqueueSnackbar("Delivery hours updated successfully", {
         variant: "success",
         autoHideDuration: 3000,
@@ -284,6 +291,7 @@ export default function DeliveryHoursSettings({
                       </Typography>
                       <ToggleButtonGroup
                         value={draft.weekdays}
+                        disabled={updateDeliveryHoursMutation.isPending}
                         onChange={(
                           _event,
                           weekdays: DeliveryHoursWeekday[],
@@ -323,6 +331,7 @@ export default function DeliveryHoursSettings({
                         <TextField
                           label="Opening time"
                           type="time"
+                          disabled={updateDeliveryHoursMutation.isPending}
                           value={draft.openingTime}
                           onChange={(event) => {
                             setDraft((current) =>
@@ -344,6 +353,7 @@ export default function DeliveryHoursSettings({
                         <TextField
                           label="Closing time"
                           type="time"
+                          disabled={updateDeliveryHoursMutation.isPending}
                           value={draft.closingTime}
                           onChange={(event) => {
                             setDraft((current) =>
@@ -372,6 +382,7 @@ export default function DeliveryHoursSettings({
                     <Box>
                       <TimezoneAutocomplete
                         value={draft.fallbackTimezone}
+                        disabled={updateDeliveryHoursMutation.isPending}
                         handler={(fallbackTimezone) => {
                           setDraft((current) =>
                             current
@@ -416,6 +427,7 @@ export default function DeliveryHoursSettings({
                             checked={draft.enabledChannels.includes(
                               ChannelType.Sms,
                             )}
+                            disabled={updateDeliveryHoursMutation.isPending}
                             onChange={(_event, checked) => {
                               setDraft((current) => {
                                 if (!current) {
@@ -457,7 +469,7 @@ export default function DeliveryHoursSettings({
           onClick={save}
           variant="contained"
           loading={updateDeliveryHoursMutation.isPending}
-          disabled={!validation.valid}
+          disabled={!validation.valid || updateDeliveryHoursMutation.isPending}
           sx={{
             alignSelf: {
               xs: "start",

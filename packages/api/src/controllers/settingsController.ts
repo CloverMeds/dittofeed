@@ -36,14 +36,9 @@ import {
   WriteKeyResource,
 } from "isomorphic-lib/src/types";
 
-const DELIVERY_HOURS_RESOURCE_FIELDS = new Set([
-  "workspaceId",
-  "weekdays",
-  "openingTime",
-  "closingTime",
-  "fallbackTimezone",
-  "enabledChannels",
-]);
+const DELIVERY_HOURS_RESOURCE_FIELDS = new Set(
+  Object.keys(WorkspaceDeliveryHoursPolicyResource.properties),
+);
 
 function hasUnsupportedDeliveryHoursFields(body: unknown): boolean {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -89,8 +84,7 @@ export default async function settingsController(fastify: FastifyInstance) {
       preValidation: (request, reply, done) => {
         if (hasUnsupportedDeliveryHoursFields(request.body)) {
           void reply.status(400).send({
-            message:
-              "Delivery hours supports one shared same-day interval only.",
+            message: "Delivery hours request contains unsupported fields.",
           });
           return;
         }

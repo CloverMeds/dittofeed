@@ -153,6 +153,7 @@ describe("rendered delivery hours settings", () => {
         </StoreProvider>,
       );
     });
+    return store;
   }
 
   function unmountSettings() {
@@ -333,5 +334,83 @@ describe("rendered delivery hours settings", () => {
     expect(getInputByLabel("Opening time").value).toBe("18:00");
     expect(getInputByLabel("Closing time").value).toBe("20:00");
     expect(getSwitchByLabel("SMS").checked).toBe(true);
+  });
+
+  it("keeps an in-flight save bound to its submitted workspace", async () => {
+    const workspaceOnePolicy: WorkspaceDeliveryHoursPolicyResource = {
+      workspaceId: "workspace-1",
+      weekdays: [DeliveryHoursWeekday.Monday],
+      openingTime: "08:00",
+      closingTime: "17:00",
+      fallbackTimezone: "America/New_York",
+      enabledChannels: [],
+    };
+    const savedWorkspaceOnePolicy: WorkspaceDeliveryHoursPolicyResource = {
+      ...workspaceOnePolicy,
+      openingTime: "09:00",
+    };
+    const workspaceTwoPolicy: WorkspaceDeliveryHoursPolicyResource = {
+      workspaceId: "workspace-2",
+      weekdays: [DeliveryHoursWeekday.Friday],
+      openingTime: "11:00",
+      closingTime: "19:00",
+      fallbackTimezone: "Europe/London",
+      enabledChannels: [ChannelType.Sms],
+    };
+    const saveRequest =
+      deferred<AxiosResponse<WorkspaceDeliveryHoursPolicyResource>>();
+    mockAxios.get
+      .mockResolvedValueOnce(axiosResponse(workspaceOnePolicy))
+      .mockResolvedValueOnce(axiosResponse(workspaceTwoPolicy));
+    mockAxios.put.mockReturnValue(saveRequest.promise);
+
+    const store = renderSettings();
+    await waitForAssertion(() => {
+      expect(getInputByLabel("Opening time").value).toBe("08:00");
+    });
+
+    setInputValue(getInputByLabel("Opening time"), "09:00");
+    click(getSaveButton());
+    await waitForAssertion(() => {
+      expect(mockAxios.put).toHaveBeenCalledWith(
+        "https://api.example.test/api/settings/delivery-hours",
+        savedWorkspaceOnePolicy,
+      );
+      expect(getSaveButton().disabled).toBe(true);
+    });
+    expect(getWeekdayButton("Monday").disabled).toBe(true);
+    expect(getInputByLabel("Opening time").disabled).toBe(true);
+    expect(getInputByLabel("Closing time").disabled).toBe(true);
+    expect(getInputByLabel("Fallback timezone").disabled).toBe(true);
+    expect(getSwitchByLabel("SMS").disabled).toBe(true);
+
+    act(() => {
+      store.setState({
+        workspace: {
+          type: CompletionStatus.Successful,
+          value: { id: "workspace-2", name: "Second workspace" },
+        },
+      });
+    });
+    await waitForAssertion(() => {
+      expect(getInputByLabel("Opening time").value).toBe("11:00");
+    });
+
+    await act(async () => {
+      saveRequest.resolve(axiosResponse(savedWorkspaceOnePolicy));
+      await saveRequest.promise;
+    });
+    await waitForAssertion(() => {
+      expect(getInputByLabel("Opening time").value).toBe("11:00");
+    });
+    expect(getWeekdayButton("Friday").getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(queryClient?.getQueryData(["deliveryHours", "workspace-1"])).toEqual(
+      savedWorkspaceOnePolicy,
+    );
+    expect(queryClient?.getQueryData(["deliveryHours", "workspace-2"])).toEqual(
+      workspaceTwoPolicy,
+    );
   });
 });

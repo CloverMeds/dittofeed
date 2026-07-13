@@ -33,6 +33,76 @@ describe("workspace delivery hours policy", () => {
     });
   });
 
+  it("returns WorkspaceNotFound when reading or saving a missing workspace", async () => {
+    const workspaceId = randomUUID();
+
+    const readResult = await getOrCreateWorkspaceDeliveryHoursPolicy({
+      workspaceId,
+    });
+    expect(readResult.isErr()).toBe(true);
+    if (readResult.isErr()) {
+      expect(readResult.error.type).toBe("WorkspaceNotFound");
+    }
+
+    const saveResult = await upsertWorkspaceDeliveryHoursPolicy({
+      workspaceId,
+      policy: DEFAULT_WORKSPACE_DELIVERY_HOURS_POLICY,
+    });
+    expect(saveResult.isErr()).toBe(true);
+    if (saveResult.isErr()) {
+      expect(saveResult.error.type).toBe("WorkspaceNotFound");
+    }
+  });
+
+  it("returns InvalidPolicy instead of persisting rejected input", async () => {
+    const workspace = unwrap(
+      await createWorkspace({ name: `delivery-hours-${randomUUID()}` }),
+    );
+
+    const result = await upsertWorkspaceDeliveryHoursPolicy({
+      workspaceId: workspace.id,
+      policy: {
+        ...DEFAULT_WORKSPACE_DELIVERY_HOURS_POLICY,
+        weekdays: [],
+      },
+    });
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error.type).toBe("InvalidPolicy");
+    }
+
+    const persisted = await db().query.workspaceDeliveryHoursPolicy.findFirst({
+      where: eq(schema.workspaceDeliveryHoursPolicy.workspaceId, workspace.id),
+    });
+    expect(persisted).toBeUndefined();
+  });
+
+  it("returns InvalidPersistedPolicy when a saved policy is malformed", async () => {
+    const workspace = unwrap(
+      await createWorkspace({ name: `delivery-hours-${randomUUID()}` }),
+    );
+    await db()
+      .insert(schema.workspaceDeliveryHoursPolicy)
+      .values({
+        workspaceId: workspace.id,
+        config: {
+          ...DEFAULT_WORKSPACE_DELIVERY_HOURS_POLICY,
+          openingTime: "17:00",
+          closingTime: "08:00",
+        },
+      });
+
+    const result = await getOrCreateWorkspaceDeliveryHoursPolicy({
+      workspaceId: workspace.id,
+    });
+
+    expect(result.isErr()).toBe(true);
+    if (result.isErr()) {
+      expect(result.error.type).toBe("InvalidPersistedPolicy");
+    }
+  });
+
   it("preserves an explicitly saved policy when defaults are ensured again", async () => {
     const workspace = unwrap(
       await createWorkspace({ name: `delivery-hours-${randomUUID()}` }),

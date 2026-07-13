@@ -79,7 +79,6 @@ describe("settings delivery hours API", () => {
     ["an overnight interval", { openingTime: "18:00" }],
     ["an invalid timezone", { fallbackTimezone: "Not/A_Timezone" }],
     ["an unsupported channel", { enabledChannels: [ChannelType.Email] }],
-    ["multiple windows", { windows: [{ openingTime: "09:00" }] }],
   ])("rejects %s", async (_description, patch) => {
     const workspace = unwrap(
       await createWorkspace({ name: `settings-api-${randomUUID()}` }),
@@ -96,6 +95,27 @@ describe("settings delivery hours API", () => {
     });
 
     expect(response.statusCode).toBe(400);
+  });
+
+  it("rejects unsupported fields with a generic error message", async () => {
+    const workspace = unwrap(
+      await createWorkspace({ name: `settings-api-${randomUUID()}` }),
+    );
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/settings/delivery-hours",
+      payload: {
+        workspaceId: workspace.id,
+        ...DEFAULT_WORKSPACE_DELIVERY_HOURS_POLICY,
+        windows: [{ openingTime: "09:00" }],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      message: "Delivery hours request contains unsupported fields.",
+    });
   });
 
   it("does not overwrite a saved policy when an invalid update is rejected", async () => {
