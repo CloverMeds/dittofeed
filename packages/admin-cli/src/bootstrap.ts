@@ -1,4 +1,10 @@
-import { bootstrapWithDefaults } from "backend-lib/src/bootstrap";
+import {
+  bootstrapWithDefaults,
+  BootstrapWithoutDefaultsParams,
+  getBootstrapDefaultParams,
+} from "backend-lib/src/bootstrap";
+import logger from "backend-lib/src/logger";
+import { managedBootstrap } from "backend-lib/src/managedBootstrap";
 import { Argv } from "yargs";
 
 export const BOOTSTRAP_OPTIONS = {
@@ -28,8 +34,24 @@ export const BOOTSTRAP_OPTIONS = {
   },
 } as const;
 
-export function boostrapOptions(cmd: Argv) {
+export function boostrapOptions<T>(cmd: Argv<T>) {
   return cmd.options(BOOTSTRAP_OPTIONS);
 }
 
+const MANAGED_BOOTSTRAP_OPTIONS = {
+  "workspace-name": BOOTSTRAP_OPTIONS["workspace-name"],
+  "workspace-domain": BOOTSTRAP_OPTIONS["workspace-domain"],
+} as const;
+
+export function managedBootstrapOptions<T>(cmd: Argv<T>) {
+  return cmd.options(MANAGED_BOOTSTRAP_OPTIONS);
+}
+
 export const bootstrapHandler = bootstrapWithDefaults;
+
+export async function managedBootstrapHandler(
+  params: BootstrapWithoutDefaultsParams,
+) {
+  const result = await managedBootstrap(getBootstrapDefaultParams(params));
+  logger().info(result, "Managed bootstrap completed successfully.");
+}

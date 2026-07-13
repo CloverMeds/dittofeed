@@ -10,7 +10,7 @@ import { NodeClickHouseClient } from "@clickhouse/client/dist/client";
 import { NodeClickHouseClientConfigOptions } from "@clickhouse/client/dist/config";
 import { v4 as uuid } from "uuid";
 
-import config from "./config";
+import config, { redactConfig } from "./config";
 import logger from "./logger";
 import { withSpan } from "./openTelemetry";
 
@@ -162,7 +162,10 @@ function getClientConfig({
       max_memory_usage: clickhouseMaxMemoryUsage,
     },
   };
-  logger().debug({ clientConfig }, "ClickHouse client config");
+  logger().debug(
+    { clientConfig: redactConfig(clientConfig) },
+    "ClickHouse client config",
+  );
   if (enableSession) {
     const sessionId = getChCompatibleUuid();
     logger().info(

@@ -304,9 +304,9 @@ export async function bootstrapPostgres({
     upsertSubscriptionSecret({
       workspaceId,
     }),
-    ...getDefaultMessageTemplates({
-      workspaceId,
-    }).map(upsertMessageTemplate),
+    ...getDefaultMessageTemplates({ workspaceId }).map((template) =>
+      upsertMessageTemplate(template).then(unwrap),
+    ),
   ]);
   const testEmailProvider = emailProviders.find(
     (ep) => ep.type === EmailProviderType.Test,
@@ -322,14 +322,14 @@ export async function bootstrapPostgres({
       name: `${workspaceName} - Email`,
       type: SubscriptionGroupType.OptOut,
       channel: ChannelType.Email,
-    }),
+    }).then(unwrap),
     upsertSubscriptionGroup({
       workspaceId,
       id: uuidv5("sms-subscription-group", workspaceId),
       name: `${workspaceName} - SMS`,
       type: SubscriptionGroupType.OptOut,
       channel: ChannelType.Sms,
-    }),
+    }).then(unwrap),
     testEmailProvider
       ? insert({
           table: dbDefaultEmailProvider,
@@ -587,13 +587,21 @@ async function waitForNamespaceAvailable(
 }
 
 export async function bootstrapTemporalNamespace(): Promise<void> {
-  const { temporalNamespace } = config();
+  const { temporalApiKey, temporalNamespace } = config();
 
   // Skip if using the default namespace (it always exists)
   if (temporalNamespace === DEFAULT_NAMESPACE) {
     logger().debug(
       { namespace: temporalNamespace },
       "Using default Temporal namespace, skipping namespace bootstrap.",
+    );
+    return;
+  }
+
+  if (temporalApiKey) {
+    logger().info(
+      { namespace: temporalNamespace },
+      "Temporal API key configured, skipping namespace bootstrap.",
     );
     return;
   }

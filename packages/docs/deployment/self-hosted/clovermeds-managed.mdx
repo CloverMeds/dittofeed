@@ -1,0 +1,102 @@
+---
+title: CloverMeds Managed AWS Deployment
+---
+
+This fork provides a one-off, source-owned setup command for deployments where
+Postgres and ClickHouse databases already exist and database creation is owned
+by infrastructure. It does not publish or promote an image; build the command
+from this source revision and pin the resulting image by digest.
+
+## Managed setup contract
+
+Run the compiled command from the Lite image:
+
+```bash
+node ./packages/admin-cli/dist/scripts/cli.js managed-bootstrap \
+  --workspace-name=Default
+```
+
+The dedicated admin image exposes the same command through its entrypoint:
+
+```bash
+./admin.sh managed-bootstrap --workspace-name=Default
+```
+
+The command runs these required phases sequentially and exits nonzero if any
+phase fails:
+
+1. Run Drizzle migrations directly in the configured Postgres database. It
+   never connects to a maintenance database or issues `CREATE DATABASE`.
+2. Create Dittofeed tables and materialized views in the configured ClickHouse
+   database. It never issues `CREATE DATABASE`.
+3. Upsert the workspace and its default resources. This path never inserts the
+   demo events controlled by `BOOTSTRAP_EVENTS`.
+4. Start or reuse the selected workspace/global compute workflows and global
+   cron.
+5. Describe every expected workflow and require its status to be `RUNNING`.
+
+Migrations, table/view DDL, workspace resources, and workflow IDs are designed
+to be safe on rerun. Keep `BOOTSTRAP=false`, `BOOTSTRAP_EVENTS=false`, and
+`BOOTSTRAP_WORKER=false` on the steady-state service; the managed command does
+not rely on those switches. The command creates a Root workspace only and does
+not accept feature mutations.
+
+## Environment variables
+
+| Variable                         | Value                                              | Contract                                                                                                                                                 |
+| -------------------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                   | Existing managed Postgres database URL             | The managed command migrates this database directly; the role needs schema migration privileges but not `CREATEDB`.                                      |
+| `DATABASE_BOOTSTRAP_MODE`        | `create`, `prefer-existing`, or `require-existing` | Controls the standard bootstrap path. Use `require-existing` in managed deployments. The managed command is existing-only regardless of this setting.    |
+| `CLICKHOUSE_HOST`                | Managed ClickHouse HTTPS endpoint                  | Required.                                                                                                                                                |
+| `CLICKHOUSE_DATABASE`            | Existing ClickHouse database                       | The role needs table/materialized-view DDL in this database but not database-creation privileges.                                                        |
+| `CLICKHOUSE_USER`                | Restricted ClickHouse user                         | Required.                                                                                                                                                |
+| `CLICKHOUSE_PASSWORD`            | Restricted ClickHouse password                     | Required.                                                                                                                                                |
+| `TEMPORAL_ADDRESS`               | Temporal frontend address                          | Required for a non-default endpoint, including Temporal Cloud.                                                                                           |
+| `TEMPORAL_NAMESPACE`             | Temporal namespace                                 | Passed to clients/workers and as connection metadata when non-default.                                                                                   |
+| `TEMPORAL_API_KEY`               | Temporal Cloud API key                             | Secret. When present, TLS is always enabled. Never written to config logs.                                                                               |
+| `TEMPORAL_TLS`                   | `true` or `false`                                  | Enables TLS without an API key. An API key still implies TLS when this is `false` or unset.                                                              |
+| `TEMPORAL_TLS_CA`                | Inline PEM CA bundle                               | Optional custom server root. A nonblank value also enables TLS and takes precedence over `TEMPORAL_TLS_CA_PATH`. A blank/whitespace-only value is unset. |
+| `TEMPORAL_TLS_CA_PATH`           | Path to a PEM CA bundle                            | Optional custom server root used when no nonblank inline CA is set. Its presence enables TLS, and the command fails if the path cannot be read.          |
+| `TEMPORAL_CONNECTION_TIMEOUT`    | Milliseconds                                       | Applied to JavaScript client connections. Temporal SDK 1.14.1 does not expose this option on native worker connections.                                  |
+| `USE_GLOBAL_COMPUTED_PROPERTIES` | `true` or `false`                                  | Selects global or per-workspace compute for setup.                                                                                                       |
+| `BOOTSTRAP_EVENTS`               | `false`                                            | Required for the steady-state CloverMeds environment; the managed command never seeds demo events.                                                       |
+
+## Temporal TLS and trust
+
+The API, Lite app, setup command, and every worker task queue share the same
+source-owned connection option builder.
+
+- `TEMPORAL_API_KEY` implies TLS and uses the SDK API-key option.
+- `TEMPORAL_TLS=true` enables server TLS without API-key authentication.
+- Either nonblank custom CA setting also enables TLS, so it cannot be silently
+  ignored.
+- Inline CA whitespace is trimmed; an empty/whitespace-only inline value is
+  treated as unset and does not enable TLS. A nonblank inline CA takes
+  precedence over a configured path.
+- An explicit CA path is used when no nonblank inline CA is set. A configured
+  blank path or a missing/unreadable path target is a fatal configuration
+  error.
+- When an API key or `TEMPORAL_TLS=true` enables TLS without either custom CA,
+  the shared builder loads the first existing OS bundle in this order:
+  `/etc/ssl/certs/ca-certificates.crt`,
+  `/etc/pki/tls/certs/ca-bundle.crt`, then `/etc/ssl/cert.pem`. If none exists,
+  connection setup fails clearly.
+- The selected CA bytes are injected identically into JavaScript and native
+  worker connections. The source images install the Debian bundle at the first
+  path above.
+- Namespace metadata is sent for every non-default namespace, independently of
+  whether API-key authentication is used.
+
+This deliberately replaces the old derived-image compiled patch. Its
+`TEMPORAL_TLS_CA_PATH`, explicit TLS, and automatic OS-bundle injection behavior
+now have first-class source equivalents shared by every client and worker.
+
+## Required external Gate 0 evidence
+
+Before production promotion, run this exact compiled command twice with
+CloverMeds-equivalent restricted Postgres and ClickHouse roles, prove the
+expected workflows against Temporal Cloud, and smoke-test the exact API and
+worker commands from the built image. Also rehearse upgrade, database
+backup/restore, image rollback, and production canary/soak. Keep the existing
+patched image and external managed-bootstrap shim available for rollback until
+that evidence and explicit human approval exist.

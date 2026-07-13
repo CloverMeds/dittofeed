@@ -127,7 +127,6 @@ export async function getOrCreateWriteKey({
     {
       writeKeyName,
       workspaceId,
-      writeKeyValue,
     },
     "creating write key",
   );

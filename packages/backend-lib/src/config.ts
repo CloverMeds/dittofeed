@@ -29,9 +29,13 @@ const BaseRawConfigProps = {
   databaseNameSuffix: Type.Optional(Type.String()),
   writeMode: Type.Optional(WriteMode),
   temporalAddress: Type.Optional(Type.String()),
+  temporalApiKey: Type.Optional(Type.String()),
   temporalConnectionTimeout: Type.Optional(
     Type.String({ format: "naturalNumber" }),
   ),
+  temporalTls: Type.Optional(BoolStr),
+  temporalTlsCa: Type.Optional(Type.String()),
+  temporalTlsCaPath: Type.Optional(Type.String()),
   clickhouseHost: Type.String(),
   clickhouseProtocol: Type.Optional(Type.String()),
   clickhouseDatabase: Type.Optional(Type.String()),
@@ -50,6 +54,13 @@ const BaseRawConfigProps = {
   temporalNamespace: Type.Optional(Type.String()),
   logConfig: Type.Optional(BoolStr),
   bootstrap: Type.Optional(BoolStr),
+  databaseBootstrapMode: Type.Optional(
+    Type.Union([
+      Type.Literal("create"),
+      Type.Literal("prefer-existing"),
+      Type.Literal("require-existing"),
+    ]),
+  ),
   bootstrapEvents: Type.Optional(BoolStr),
   bootstrapWorker: Type.Optional(BoolStr),
   bootstrapSafe: Type.Optional(BoolStr),
@@ -280,6 +291,7 @@ export type Config = Overwrite<
     bootstrapEvents: boolean;
     bootstrapSafe: boolean;
     bootstrapWorker: boolean;
+    databaseBootstrapMode: "create" | "prefer-existing" | "require-existing";
     clickhouseDatabase: string;
     clickhouseHost: string;
     computedPropertiesActivityTaskQueue: string;
@@ -324,8 +336,12 @@ export type Config = Overwrite<
     signoutRedirectUrl: string;
     startOtel: boolean;
     temporalAddress: string;
+    temporalApiKey?: string;
     temporalNamespace: string;
     temporalConnectionTimeout?: number;
+    temporalTls: boolean;
+    temporalTlsCa?: string;
+    temporalTlsCaPath?: string;
     trackDashboard: boolean;
     useGlobalComputedProperties?: boolean;
     userEventsTopicName: string;
@@ -354,7 +370,7 @@ export type Config = Overwrite<
   apiBase: string;
 };
 
-export const SECRETS = new Set<keyof Config>([
+export const SECRETS: ReadonlySet<string> = new Set<keyof Config>([
   "databasePassword",
   "clickhousePassword",
   "kafkaPassword",
@@ -367,7 +383,18 @@ export const SECRETS = new Set<keyof Config>([
   "hyperDxApiKey",
   "databaseUrl", // Contains password
   "dashboardWriteKey", // Potentially sensitive
+  "temporalApiKey",
+  "temporalTlsCa",
 ]);
+
+export function redactConfig(configValue: object): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(configValue).map(([key, value]) => [
+      key,
+      SECRETS.has(key) ? "****" : value,
+    ]),
+  );
+}
 
 const defaultDbParams: Record<string, string> = {
   connect_timeout: "60",
@@ -643,6 +670,10 @@ function parseRawConfig(rawConfig: RawConfig): Config {
     userEventsTopicName:
       rawConfig.userEventsTopicName ?? "dittofeed-user-events",
     temporalNamespace: rawConfig.temporalNamespace ?? "default",
+    temporalApiKey: rawConfig.temporalApiKey,
+    temporalTls: rawConfig.temporalTls === "true",
+    temporalTlsCa: rawConfig.temporalTlsCa,
+    temporalTlsCaPath: rawConfig.temporalTlsCaPath,
     temporalConnectionTimeout: rawConfig.temporalConnectionTimeout
       ? parseInt(rawConfig.temporalConnectionTimeout)
       : undefined,
@@ -801,6 +832,7 @@ function parseRawConfig(rawConfig: RawConfig): Config {
       rawConfig.defaultGetSegmentAndEventDetailsMaxAttempts,
       nodeEnv === NodeEnvEnum.Test ? 1 : 10,
     ),
+    databaseBootstrapMode: rawConfig.databaseBootstrapMode ?? "create",
   };
 
   return parsedConfig;

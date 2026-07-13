@@ -2,11 +2,68 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import fs from "fs/promises";
 import path from "path";
 import { Client } from "pg";
-import { PostgresError } from "pg-error-enum";
 
 import config, { databaseUrlWithoutName } from "./config";
 import { db } from "./db";
 import logger from "./logger";
+
+const DUPLICATE_DATABASE_CODE = "42P04";
+const INVALID_CATALOG_NAME_CODE = "3D000";
+
+export const PostgresBootstrapMode = {
+  Create: "create",
+  PreferExisting: "prefer-existing",
+  RequireExisting: "require-existing",
+} as const;
+
+export type PostgresBootstrapMode =
+  (typeof PostgresBootstrapMode)[keyof typeof PostgresBootstrapMode];
+
+interface DatabaseBootstrapPlan {
+  createDatabase: boolean;
+  requireExisting: boolean;
+  checkExistingFirst?: boolean;
+}
+
+export interface PostgresClient {
+  connect(): Promise<void>;
+  end(): Promise<void>;
+  escapeIdentifier(value: string): string;
+  query(sql: string): Promise<unknown>;
+}
+
+type PostgresClientFactory = (connectionString: string) => PostgresClient;
+
+export interface BootstrapDatabaseForMigrationsParams {
+  mode: PostgresBootstrapMode;
+  database: string;
+  databaseUrl: string;
+  maintenanceDatabaseUrl: string;
+  clientFactory?: PostgresClientFactory;
+}
+
+export function getDatabaseBootstrapPlan(
+  mode: PostgresBootstrapMode,
+): DatabaseBootstrapPlan {
+  switch (mode) {
+    case PostgresBootstrapMode.Create:
+      return {
+        createDatabase: true,
+        requireExisting: false,
+      };
+    case PostgresBootstrapMode.PreferExisting:
+      return {
+        createDatabase: true,
+        requireExisting: false,
+        checkExistingFirst: true,
+      };
+    case PostgresBootstrapMode.RequireExisting:
+      return {
+        createDatabase: false,
+        requireExisting: true,
+      };
+  }
+}
 
 async function checkDirectory(p: string) {
   try {
@@ -17,28 +74,105 @@ async function checkDirectory(p: string) {
   }
 }
 
-async function createDatabase() {
-  const client = new Client(databaseUrlWithoutName());
-  const { database } = config();
+function getErrorCode(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return null;
+  }
+
+  const { code } = error;
+  return typeof code === "string" ? code : null;
+}
+
+async function createDatabase({
+  clientFactory,
+  database,
+  maintenanceDatabaseUrl,
+}: Pick<
+  Required<BootstrapDatabaseForMigrationsParams>,
+  "clientFactory" | "database" | "maintenanceDatabaseUrl"
+>) {
+  const client = clientFactory(maintenanceDatabaseUrl);
   try {
     await client.connect();
-    await client.query(`
-      CREATE DATABASE ${database}
-    `);
+    const escapedDatabase = client.escapeIdentifier(database);
+    await client.query(`CREATE DATABASE ${escapedDatabase}`);
   } catch (e) {
-    const error = e as Error;
-    if (
-      "code" in error &&
-      typeof error.code === "string" &&
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-comparison
-      error.code === PostgresError.DUPLICATE_DATABASE
-    ) {
+    if (getErrorCode(e) === DUPLICATE_DATABASE_CODE) {
       logger().info({ database }, "Database already exists");
     } else {
-      throw error;
+      throw e;
     }
   } finally {
     await client.end();
+  }
+}
+
+function isMissingDatabaseError(error: unknown): boolean {
+  return getErrorCode(error) === INVALID_CATALOG_NAME_CODE;
+}
+
+async function configuredDatabaseExists({
+  clientFactory,
+  databaseUrl,
+}: Pick<
+  Required<BootstrapDatabaseForMigrationsParams>,
+  "clientFactory" | "databaseUrl"
+>): Promise<boolean> {
+  const client = clientFactory(databaseUrl);
+  try {
+    await client.connect();
+    await client.query("SELECT 1");
+    return true;
+  } catch (e) {
+    if (isMissingDatabaseError(e)) {
+      return false;
+    }
+    throw e;
+  } finally {
+    await client.end();
+  }
+}
+
+async function requireConfiguredDatabase(
+  params: Required<BootstrapDatabaseForMigrationsParams>,
+) {
+  const exists = await configuredDatabaseExists(params);
+  if (!exists) {
+    throw new Error(
+      `Postgres bootstrap mode require-existing requires configured database '${params.database}' to already exist. Create it before running migrations or use DATABASE_BOOTSTRAP_MODE=create.`,
+    );
+  }
+}
+
+export async function bootstrapDatabaseForMigrations({
+  clientFactory = (connectionString) => new Client(connectionString),
+  ...params
+}: BootstrapDatabaseForMigrationsParams): Promise<void> {
+  const resolvedParams: Required<BootstrapDatabaseForMigrationsParams> = {
+    ...params,
+    clientFactory,
+  };
+  const { mode } = resolvedParams;
+  const plan = getDatabaseBootstrapPlan(mode);
+
+  if (plan.requireExisting) {
+    await requireConfiguredDatabase(resolvedParams);
+    return;
+  }
+
+  if (
+    plan.checkExistingFirst &&
+    (await configuredDatabaseExists(resolvedParams))
+  ) {
+    logger().info(
+      { database: resolvedParams.database },
+      "Database already exists, skipping create database step",
+    );
+    return;
+  }
+
+  if (plan.createDatabase) {
+    await createDatabase(resolvedParams);
   }
 }
 
@@ -63,16 +197,74 @@ export async function findDrizzleFolder(dirname: string): Promise<string> {
   return migrationsFolder;
 }
 
-export async function publicDrizzleMigrate() {
+export async function publicDrizzleMigrate({
+  database = db(),
+}: {
+  database?: Parameters<typeof migrate>[0];
+} = {}) {
   const migrationsFolder = await findDrizzleFolder(__dirname);
 
   logger().info({ migrationsFolder }, "Running migrations");
-  await migrate(db(), {
+  await migrate(database, {
     migrationsFolder,
   });
 }
 
+export interface ManagedDrizzleMigrateParams {
+  clientFactory?: PostgresClientFactory;
+  database?: Parameters<typeof migrate>[0];
+  databaseName?: string;
+  databaseUrl?: string;
+}
+
+export interface ManagedDrizzleMigrateDependencies {
+  bootstrapDatabase: typeof bootstrapDatabaseForMigrations;
+  migrateDatabase: typeof publicDrizzleMigrate;
+}
+
+/**
+ * Runs the managed bootstrap migration contract against an already-provisioned
+ * database. This deliberately ignores DATABASE_BOOTSTRAP_MODE: the managed
+ * path must never connect to a maintenance database or issue CREATE DATABASE.
+ */
+export async function managedDrizzleMigrate(
+  {
+    clientFactory,
+    database: migrationDatabase,
+    databaseName,
+    databaseUrl,
+  }: ManagedDrizzleMigrateParams = {},
+  dependencies: ManagedDrizzleMigrateDependencies = {
+    bootstrapDatabase: bootstrapDatabaseForMigrations,
+    migrateDatabase: publicDrizzleMigrate,
+  },
+) {
+  const backendConfig = databaseName && databaseUrl ? null : config();
+  const resolvedDatabaseName = databaseName ?? backendConfig?.database;
+  const resolvedDatabaseUrl = databaseUrl ?? backendConfig?.databaseUrl;
+  if (!resolvedDatabaseName || !resolvedDatabaseUrl) {
+    throw new Error("Managed Postgres database configuration is incomplete.");
+  }
+
+  await dependencies.bootstrapDatabase({
+    mode: PostgresBootstrapMode.RequireExisting,
+    database: resolvedDatabaseName,
+    databaseUrl: resolvedDatabaseUrl,
+    // RequireExisting never uses this URL. Supplying the configured URL keeps
+    // the no-maintenance-connection invariant explicit in this source path.
+    maintenanceDatabaseUrl: resolvedDatabaseUrl,
+    ...(clientFactory ? { clientFactory } : {}),
+  });
+  await dependencies.migrateDatabase({ database: migrationDatabase });
+}
+
 export async function drizzleMigrate() {
-  await createDatabase();
+  const { database, databaseBootstrapMode, databaseUrl } = config();
+  await bootstrapDatabaseForMigrations({
+    mode: databaseBootstrapMode,
+    database,
+    databaseUrl,
+    maintenanceDatabaseUrl: databaseUrlWithoutName(),
+  });
   await publicDrizzleMigrate();
 }

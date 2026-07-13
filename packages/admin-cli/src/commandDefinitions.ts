@@ -95,7 +95,12 @@ import * as R from "remeda";
 import { validate as validateUuid } from "uuid";
 import { Argv } from "yargs";
 
-import { boostrapOptions, bootstrapHandler } from "./bootstrap";
+import {
+  boostrapOptions,
+  bootstrapHandler,
+  managedBootstrapHandler,
+  managedBootstrapOptions,
+} from "./bootstrap";
 import { hubspotSync } from "./hubspot";
 import { resetWorkspaceData } from "./reset";
 import { spawnWithEnv } from "./spawn";
@@ -148,6 +153,12 @@ export function createCommands(yargs: Argv): Argv {
       "Initialize the dittofeed application and creates a workspace.",
       boostrapOptions,
       bootstrapHandler,
+    )
+    .command(
+      "managed-bootstrap",
+      "Initialize Dittofeed in existing managed databases and verify required workflows.",
+      managedBootstrapOptions,
+      managedBootstrapHandler,
     )
     .command(
       "print-get-users-query",

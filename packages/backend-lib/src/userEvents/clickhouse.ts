@@ -290,7 +290,18 @@ export async function insertProcessedComputedProperties({
   });
 }
 
-export async function createUserEventsTables() {
+export interface ClickHouseBootstrapClient {
+  exec(params: {
+    query: string;
+    clickhouse_settings: { wait_end_of_query: 1 };
+  }): Promise<unknown>;
+}
+
+export async function createUserEventsTables({
+  client = clickhouseClient(),
+}: {
+  client?: ClickHouseBootstrapClient;
+} = {}) {
   logger().info("Creating user events tables");
 
   const queries = [
@@ -531,7 +542,7 @@ export async function createUserEventsTables() {
 
   await Promise.all(
     queries.map((query) =>
-      clickhouseClient().exec({
+      client.exec({
         query,
         clickhouse_settings: { wait_end_of_query: 1 },
       }),
@@ -569,7 +580,7 @@ export async function createUserEventsTables() {
 
   await Promise.all(
     mvQueries.map((query) =>
-      clickhouseClient().exec({
+      client.exec({
         query,
         clickhouse_settings: { wait_end_of_query: 1 },
       }),
