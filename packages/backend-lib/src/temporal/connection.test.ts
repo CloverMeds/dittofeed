@@ -1,9 +1,26 @@
+import { existsSync, readFileSync } from "node:fs";
+
+const SYSTEM_CA_BUNDLE_PATHS = [
+  "/etc/ssl/certs/ca-certificates.crt",
+  "/etc/pki/tls/certs/ca-bundle.crt",
+  "/etc/ssl/cert.pem",
+];
+
+function getExpectedSystemCaBundle(): Uint8Array {
+  const caPath = SYSTEM_CA_BUNDLE_PATHS.find(existsSync);
+  if (!caPath) {
+    throw new Error("Test host does not provide a supported system CA bundle");
+  }
+  return Uint8Array.from(readFileSync(caPath));
+}
+
 describe("Temporal connection wrappers", () => {
   beforeEach(() => {
     jest.resetModules();
   });
 
   it("passes the complete client contract to Connection.connect", async () => {
+    const ca = getExpectedSystemCaBundle();
     const connection = { kind: "client-connection" };
     const connect = jest.fn().mockResolvedValue(connection);
     jest.doMock("@temporalio/client", () => ({
@@ -30,7 +47,9 @@ describe("Temporal connection wrappers", () => {
       metadata: {
         "temporal-namespace": "namespace.account",
       },
-      tls: true,
+      tls: {
+        serverRootCACertificate: ca,
+      },
     });
   });
 
