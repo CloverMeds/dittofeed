@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import { ConnectionOptions } from "@temporalio/client";
 import { NativeConnectionOptions } from "@temporalio/worker";
@@ -20,6 +20,26 @@ interface TemporalCommonConnectionOptions {
   tls?: ConnectionOptions["tls"];
 }
 
+export const DEFAULT_TEMPORAL_CA_BUNDLE_PATHS = [
+  "/etc/ssl/certs/ca-certificates.crt",
+  "/etc/pki/tls/certs/ca-bundle.crt",
+  "/etc/ssl/cert.pem",
+] as const;
+
+export function loadTemporalSystemCaBundle(
+  caBundlePaths: readonly string[] = DEFAULT_TEMPORAL_CA_BUNDLE_PATHS,
+): Uint8Array {
+  const caBundlePath = caBundlePaths.find(existsSync);
+  if (!caBundlePath) {
+    throw new Error("Unable to locate a system CA bundle for Temporal TLS");
+  }
+  try {
+    return Uint8Array.from(readFileSync(caBundlePath));
+  } catch {
+    throw new Error("Unable to read the system CA bundle for Temporal TLS");
+  }
+}
+
 function getTemporalTlsOptions({
   temporalApiKey,
   temporalTls,
@@ -28,31 +48,29 @@ function getTemporalTlsOptions({
 }: TemporalConnectionConfig): ConnectionOptions["tls"] {
   const inlineCa = temporalTlsCa?.trim();
   const caPath = temporalTlsCaPath?.trim();
+  if (inlineCa) {
+    return {
+      serverRootCACertificate: new TextEncoder().encode(inlineCa),
+    };
+  }
   if (temporalTlsCaPath !== undefined && !caPath) {
     throw new Error("TEMPORAL_TLS_CA_PATH must not be blank");
   }
-  if (inlineCa && caPath) {
-    throw new Error(
-      "Configure only one of TEMPORAL_TLS_CA and TEMPORAL_TLS_CA_PATH",
-    );
-  }
-
-  const customCaConfigured = Boolean(inlineCa) || Boolean(caPath);
-  if (!temporalApiKey && !temporalTls && !customCaConfigured) {
-    return undefined;
-  }
-
-  let serverRootCACertificate: Uint8Array | undefined;
-  if (inlineCa) {
-    serverRootCACertificate = new TextEncoder().encode(inlineCa);
-  } else if (caPath) {
+  if (caPath) {
     try {
-      serverRootCACertificate = Uint8Array.from(readFileSync(caPath));
+      return {
+        serverRootCACertificate: Uint8Array.from(readFileSync(caPath)),
+      };
     } catch {
       throw new Error("Unable to read TEMPORAL_TLS_CA_PATH");
     }
   }
-  return serverRootCACertificate ? { serverRootCACertificate } : true;
+  if (!temporalApiKey && !temporalTls) {
+    return undefined;
+  }
+  return {
+    serverRootCACertificate: loadTemporalSystemCaBundle(),
+  };
 }
 
 function getTemporalCommonConnectionOptions(

@@ -1,7 +1,6 @@
 import {
   WorkflowClient,
   WorkflowExecutionStatusName,
-  WorkflowNotFoundError,
 } from "@temporalio/client";
 
 import { bootstrapPostgres, BootstrapWorkspaceParams } from "./bootstrap";
@@ -28,9 +27,6 @@ export interface ManagedBootstrapDependencies {
   describeWorkflow: (params: {
     workflowId: string;
   }) => Promise<WorkflowExecutionStatusName>;
-  getWorkflowStatus: (params: {
-    workflowId: string;
-  }) => Promise<WorkflowExecutionStatusName | null>;
   initializeClickhouse: () => Promise<void>;
   migratePostgres: () => Promise<void>;
   resolveGlobalCompute: (params: { workspaceId: string }) => Promise<boolean>;
@@ -47,13 +43,6 @@ export interface ManagedBootstrapResult {
   workflowIds: string[];
 }
 
-const INACTIVE_WORKFLOW_STATUSES = new Set<WorkflowExecutionStatusName>([
-  "CANCELLED",
-  "COMPLETED",
-  "FAILED",
-  "TERMINATED",
-  "TIMED_OUT",
-]);
 const SAFE_PROVIDER_ERROR_CODES = new Set(["3D000", "42501", "81", "497"]);
 
 class SafeManagedBootstrapFailure extends Error {
@@ -93,18 +82,6 @@ export function createDefaultManagedBootstrapDependencies(): ManagedBootstrapDep
       const client = await getWorkflowClient();
       const description = await client.getHandle(workflowId).describe();
       return description.status.name;
-    },
-    getWorkflowStatus: async ({ workflowId }) => {
-      try {
-        const client = await getWorkflowClient();
-        const description = await client.getHandle(workflowId).describe();
-        return description.status.name;
-      } catch (error) {
-        if (error instanceof WorkflowNotFoundError) {
-          return null;
-        }
-        throw error;
-      }
     },
     initializeClickhouse: createUserEventsTables,
     migratePostgres: managedDrizzleMigrate,
@@ -210,44 +187,6 @@ async function runRequiredPhase<T>(
   }
 }
 
-async function assertNoConflictingComputeWorkflows({
-  dependencies,
-  useGlobalCompute,
-  workspaceId,
-}: {
-  dependencies: ManagedBootstrapDependencies;
-  useGlobalCompute: boolean;
-  workspaceId: string;
-}): Promise<void> {
-  // Both compute workflow families keep processing after a configuration flip.
-  // Refuse to start the second family; shared global workflows require an
-  // explicit operator-owned transition and must never be stopped here.
-  const opposingWorkflowIds = useGlobalCompute
-    ? [generateComputePropertiesId(workspaceId)]
-    : [
-        COMPUTE_PROPERTIES_QUEUE_WORKFLOW_ID,
-        COMPUTE_PROPERTIES_SCHEDULER_WORKFLOW_ID,
-      ];
-
-  for (const workflowId of opposingWorkflowIds) {
-    // Keep these checks sequential so the failure names the first workflow
-    // whose state prevents a safe transition.
-    // eslint-disable-next-line no-await-in-loop
-    const status = await runRequiredPhase(
-      `Managed bootstrap failed while checking Temporal workflow '${workflowId}' for a compute-mode conflict.`,
-      () => dependencies.getWorkflowStatus({ workflowId }),
-    );
-    if (status === null || INACTIVE_WORKFLOW_STATUSES.has(status)) {
-      continue;
-    }
-    throw new Error(
-      `Managed bootstrap cannot start ${
-        useGlobalCompute ? "global" : "workspace"
-      } compute workflows while opposing Temporal workflow '${workflowId}' has status '${status}'. Complete the compute-mode transition explicitly, then rerun; managed bootstrap did not terminate any workflow.`,
-    );
-  }
-}
-
 export async function managedBootstrap(
   params: BootstrapWorkspaceParams,
   dependencies: ManagedBootstrapDependencies = createDefaultManagedBootstrapDependencies(),
@@ -277,11 +216,6 @@ export async function managedBootstrap(
     "Managed bootstrap failed while resolving compute workflow mode.",
     () => dependencies.resolveGlobalCompute({ workspaceId }),
   );
-  await assertNoConflictingComputeWorkflows({
-    dependencies,
-    useGlobalCompute,
-    workspaceId,
-  });
 
   let computeWorkflowIds: string[];
   if (useGlobalCompute) {

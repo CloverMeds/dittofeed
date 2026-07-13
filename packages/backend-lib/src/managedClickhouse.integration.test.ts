@@ -26,7 +26,6 @@ describeManagedClickhouse(
       )}`;
       const dependencies: ManagedBootstrapDependencies = {
         describeWorkflow: () => Promise.resolve("RUNNING"),
-        getWorkflowStatus: () => Promise.resolve(null),
         initializeClickhouse: () => createUserEventsTables({ client }),
         migratePostgres: () => Promise.resolve(),
         resolveGlobalCompute: () => Promise.resolve(false),

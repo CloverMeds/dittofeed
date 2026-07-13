@@ -1,11 +1,27 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
+  DEFAULT_TEMPORAL_CA_BUNDLE_PATHS,
   getTemporalConnectionOptions,
   getTemporalNativeConnectionOptions,
+  loadTemporalSystemCaBundle,
 } from "./connectionOptions";
+
+function getExpectedSystemCaBundle(): Uint8Array {
+  const caPath = DEFAULT_TEMPORAL_CA_BUNDLE_PATHS.find(existsSync);
+  if (!caPath) {
+    throw new Error("Test host does not provide a supported system CA bundle");
+  }
+  return Uint8Array.from(readFileSync(caPath));
+}
 
 describe("temporal connection options", () => {
   it("preserves upstream options when no API key is configured", () => {
@@ -19,17 +35,67 @@ describe("temporal connection options", () => {
     });
   });
 
-  it("enables system-trust TLS without an API key when configured", () => {
-    expect(
-      getTemporalConnectionOptions({
-        temporalAddress: "temporal.example.com:7233",
-        temporalNamespace: "default",
-        temporalTls: true,
-      }),
-    ).toEqual({
+  it("loads the default system CA for client and native TLS", () => {
+    const ca = getExpectedSystemCaBundle();
+    const connectionConfig = {
+      temporalAddress: "temporal.example.com:7233",
+      temporalNamespace: "default",
+      temporalTls: true,
+    };
+
+    expect(getTemporalConnectionOptions(connectionConfig)).toEqual({
       address: "temporal.example.com:7233",
-      tls: true,
+      tls: { serverRootCACertificate: ca },
     });
+    expect(getTemporalNativeConnectionOptions(connectionConfig)).toEqual({
+      address: "temporal.example.com:7233",
+      tls: { serverRootCACertificate: ca },
+    });
+  });
+
+  it("uses the first existing default CA bundle path in order", () => {
+    expect(DEFAULT_TEMPORAL_CA_BUNDLE_PATHS).toEqual([
+      "/etc/ssl/certs/ca-certificates.crt",
+      "/etc/pki/tls/certs/ca-bundle.crt",
+      "/etc/ssl/cert.pem",
+    ]);
+
+    const directory = mkdtempSync(
+      path.join(tmpdir(), "dittofeed-temporal-system-ca-"),
+    );
+    const firstExistingPath = path.join(directory, "first.pem");
+    const secondExistingPath = path.join(directory, "second.pem");
+    writeFileSync(firstExistingPath, "first-system-ca", "utf8");
+    writeFileSync(secondExistingPath, "second-system-ca", "utf8");
+
+    try {
+      expect(
+        loadTemporalSystemCaBundle([
+          path.join(directory, "missing.pem"),
+          firstExistingPath,
+          secondExistingPath,
+        ]),
+      ).toEqual(new TextEncoder().encode("first-system-ca"));
+    } finally {
+      rmSync(directory, { recursive: true });
+    }
+  });
+
+  it("fails clearly when TLS is enabled without an available CA bundle", () => {
+    const directory = mkdtempSync(
+      path.join(tmpdir(), "dittofeed-temporal-system-ca-"),
+    );
+
+    try {
+      expect(() =>
+        loadTemporalSystemCaBundle([
+          path.join(directory, "missing-one.pem"),
+          path.join(directory, "missing-two.pem"),
+        ]),
+      ).toThrow("Unable to locate a system CA bundle for Temporal TLS");
+    } finally {
+      rmSync(directory, { recursive: true });
+    }
   });
 
   it("adds non-default namespace metadata independently of authentication", () => {
@@ -46,7 +112,8 @@ describe("temporal connection options", () => {
     });
   });
 
-  it("uses system trust when an API key enables TLS without a custom CA", () => {
+  it("loads the default system CA when an API key enables TLS", () => {
+    const ca = getExpectedSystemCaBundle();
     expect(
       getTemporalConnectionOptions({
         temporalAddress: "namespace.account.tmprl.cloud:7233",
@@ -56,7 +123,7 @@ describe("temporal connection options", () => {
     ).toEqual({
       address: "namespace.account.tmprl.cloud:7233",
       apiKey: "test-api-key",
-      tls: true,
+      tls: { serverRootCACertificate: ca },
     });
   });
 
@@ -106,7 +173,8 @@ describe("temporal connection options", () => {
     });
   });
 
-  it("uses system trust when explicit TLS accompanies a blank inline CA", () => {
+  it("loads the default system CA when explicit TLS accompanies a blank inline CA", () => {
+    const ca = getExpectedSystemCaBundle();
     const connectionConfig = {
       temporalAddress: "temporal.example.com:7233",
       temporalNamespace: "default",
@@ -116,15 +184,16 @@ describe("temporal connection options", () => {
 
     expect(getTemporalConnectionOptions(connectionConfig)).toEqual({
       address: "temporal.example.com:7233",
-      tls: true,
+      tls: { serverRootCACertificate: ca },
     });
     expect(getTemporalNativeConnectionOptions(connectionConfig)).toEqual({
       address: "temporal.example.com:7233",
-      tls: true,
+      tls: { serverRootCACertificate: ca },
     });
   });
 
-  it("uses system trust when an API key accompanies a blank inline CA", () => {
+  it("loads the default system CA when an API key accompanies a blank inline CA", () => {
+    const ca = getExpectedSystemCaBundle();
     const connectionConfig = {
       temporalAddress: "temporal.example.com:7233",
       temporalApiKey: "test-api-key",
@@ -135,12 +204,12 @@ describe("temporal connection options", () => {
     expect(getTemporalConnectionOptions(connectionConfig)).toEqual({
       address: "temporal.example.com:7233",
       apiKey: "test-api-key",
-      tls: true,
+      tls: { serverRootCACertificate: ca },
     });
     expect(getTemporalNativeConnectionOptions(connectionConfig)).toEqual({
       address: "temporal.example.com:7233",
       apiKey: "test-api-key",
-      tls: true,
+      tls: { serverRootCACertificate: ca },
     });
   });
 
@@ -171,27 +240,23 @@ describe("temporal connection options", () => {
     }
   });
 
-  it("rejects conflicting custom CA sources without exposing their values", () => {
-    const buildOptions = () =>
-      getTemporalConnectionOptions({
-        temporalAddress: "temporal.example.com:7233",
-        temporalApiKey: "super-secret-api-key",
-        temporalNamespace: "team.example",
-        temporalTlsCa: "super-secret-inline-ca",
-        temporalTlsCaPath: "/private/super-secret-ca.pem",
-      });
+  it("prefers an inline CA over an explicit path for client and native connections", () => {
+    const connectionConfig = {
+      temporalAddress: "temporal.example.com:7233",
+      temporalNamespace: "team.example",
+      temporalTlsCa: "inline-ca",
+      temporalTlsCaPath: "/private/unreadable-ca.pem",
+    };
+    const tls = {
+      serverRootCACertificate: new TextEncoder().encode("inline-ca"),
+    };
 
-    expect(buildOptions).toThrow(
-      "Configure only one of TEMPORAL_TLS_CA and TEMPORAL_TLS_CA_PATH",
-    );
-    try {
-      buildOptions();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      expect(message).not.toContain("super-secret-api-key");
-      expect(message).not.toContain("super-secret-inline-ca");
-      expect(message).not.toContain("/private/super-secret-ca.pem");
-    }
+    expect(getTemporalConnectionOptions(connectionConfig)).toMatchObject({
+      tls,
+    });
+    expect(getTemporalNativeConnectionOptions(connectionConfig)).toMatchObject({
+      tls,
+    });
   });
 
   it("fails secret-safely when the configured CA path cannot be read", () => {
@@ -208,6 +273,13 @@ describe("temporal connection options", () => {
 
     try {
       expect(buildOptions).toThrow("Unable to read TEMPORAL_TLS_CA_PATH");
+      expect(() =>
+        getTemporalNativeConnectionOptions({
+          temporalAddress: "temporal.example.com:7233",
+          temporalNamespace: "team.example",
+          temporalTlsCaPath: caPath,
+        }),
+      ).toThrow("Unable to read TEMPORAL_TLS_CA_PATH");
       try {
         buildOptions();
       } catch (error) {
@@ -259,7 +331,8 @@ describe("temporal connection options", () => {
     });
   });
 
-  it("enables system-trust TLS without an API key for native workers", () => {
+  it("loads the default system CA without an API key for native workers", () => {
+    const ca = getExpectedSystemCaBundle();
     expect(
       getTemporalNativeConnectionOptions({
         temporalAddress: "temporal.example.com:7233",
@@ -268,7 +341,7 @@ describe("temporal connection options", () => {
       }),
     ).toEqual({
       address: "temporal.example.com:7233",
-      tls: true,
+      tls: { serverRootCACertificate: ca },
     });
   });
 
@@ -331,17 +404,5 @@ describe("temporal connection options", () => {
     } finally {
       rmSync(directory, { recursive: true });
     }
-  });
-
-  it("rejects conflicting custom CA sources for native workers", () => {
-    expect(() =>
-      getTemporalNativeConnectionOptions({
-        temporalAddress: "temporal.example.com:7233",
-        temporalNamespace: "default",
-        temporalTls: true,
-        temporalTlsCa: "inline-ca",
-        temporalTlsCaPath: "/private/ca.pem",
-      }),
-    ).toThrow("Configure only one of TEMPORAL_TLS_CA and TEMPORAL_TLS_CA_PATH");
   });
 });

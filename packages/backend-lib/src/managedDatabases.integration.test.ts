@@ -67,7 +67,6 @@ describe("managed Postgres bootstrap with a restricted role", () => {
     const database = drizzle({ client: restrictedPool });
     const dependencies: ManagedBootstrapDependencies = {
       describeWorkflow: () => Promise.resolve("RUNNING"),
-      getWorkflowStatus: () => Promise.resolve(null),
       initializeClickhouse: () => Promise.resolve(),
       migratePostgres: () =>
         managedDrizzleMigrate({

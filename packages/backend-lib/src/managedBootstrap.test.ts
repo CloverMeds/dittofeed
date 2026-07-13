@@ -1,4 +1,3 @@
-import { WorkflowClient, WorkflowNotFoundError } from "@temporalio/client";
 import { err } from "neverthrow";
 
 import {
@@ -8,20 +7,12 @@ import {
   upsertManagedWorkspace,
 } from "./managedBootstrap";
 import { managedDrizzleMigrate } from "./migrate";
-import connectWorkflowClient from "./temporal/connectWorkflowClient";
 import {
   CreateWorkspaceErrorType,
   FeatureNamesEnum,
   WorkspaceTypeAppEnum,
 } from "./types";
 import { createUserEventsTables } from "./userEvents/clickhouse";
-
-jest.mock("./temporal/connectWorkflowClient", () => ({
-  __esModule: true,
-  default: jest.fn(),
-}));
-
-const mockedConnectWorkflowClient = jest.mocked(connectWorkflowClient);
 
 const MANAGED_PARAMS = {
   workspaceName: "Managed",
@@ -33,7 +24,6 @@ function createDependencies(
 ): ManagedBootstrapDependencies {
   return {
     describeWorkflow: () => Promise.resolve("RUNNING"),
-    getWorkflowStatus: () => Promise.resolve(null),
     initializeClickhouse: () => Promise.resolve(),
     migratePostgres: () => Promise.resolve(),
     resolveGlobalCompute: () => Promise.resolve(false),
@@ -64,47 +54,6 @@ describe("managedBootstrap", () => {
     expect(dependencies.migratePostgres).toBe(managedDrizzleMigrate);
     expect(dependencies.initializeClickhouse).toBe(createUserEventsTables);
     expect(dependencies.upsertWorkspace).toBe(upsertManagedWorkspace);
-  });
-
-  it("treats a missing opposing Temporal workflow as inactive", async () => {
-    const client = new WorkflowClient();
-    const handle = client.getHandle("compute-properties-workflow-workspace-1");
-    jest
-      .spyOn(handle, "describe")
-      .mockRejectedValue(
-        new WorkflowNotFoundError(
-          "workflow not found",
-          "compute-properties-workflow-workspace-1",
-          undefined,
-        ),
-      );
-    jest.spyOn(client, "getHandle").mockReturnValue(handle);
-    mockedConnectWorkflowClient.mockResolvedValue(client);
-
-    const dependencies = createDefaultManagedBootstrapDependencies();
-
-    await expect(
-      dependencies.getWorkflowStatus({
-        workflowId: "compute-properties-workflow-workspace-1",
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("preserves non-not-found Temporal status lookup failures for sanitization", async () => {
-    const providerFailure = new Error("Temporal TLS failed");
-    const client = new WorkflowClient();
-    const handle = client.getHandle("compute-properties-workflow-workspace-1");
-    jest.spyOn(handle, "describe").mockRejectedValue(providerFailure);
-    jest.spyOn(client, "getHandle").mockReturnValue(handle);
-    mockedConnectWorkflowClient.mockResolvedValue(client);
-
-    const dependencies = createDefaultManagedBootstrapDependencies();
-
-    await expect(
-      dependencies.getWorkflowStatus({
-        workflowId: "compute-properties-workflow-workspace-1",
-      }),
-    ).rejects.toBe(providerFailure);
   });
 
   it("rejects Parent workspaces before starting any phase", async () => {
@@ -220,116 +169,6 @@ describe("managedBootstrap", () => {
     ]);
     expect(verifiedWorkflowIds).toEqual(result.workflowIds);
     expect(startGlobalCompute).toHaveBeenCalledTimes(1);
-    expect(startWorkspaceCompute).not.toHaveBeenCalled();
-  });
-
-  it.each(["RUNNING", "CONTINUED_AS_NEW", "UNKNOWN", "UNSPECIFIED"] as const)(
-    "fails closed when a %s workspace workflow opposes global compute",
-    async (status) => {
-      const getWorkflowStatus = jest.fn(() => Promise.resolve(status));
-      const startGlobalCompute = jest.fn(() => Promise.resolve());
-      const startGlobalCron = jest.fn(() => Promise.resolve());
-      const dependencies = createDependencies({
-        getWorkflowStatus,
-        resolveGlobalCompute: () => Promise.resolve(true),
-        startGlobalCompute,
-        startGlobalCron,
-      });
-
-      await expect(
-        managedBootstrap(MANAGED_PARAMS, dependencies),
-      ).rejects.toThrow(
-        `Managed bootstrap cannot start global compute workflows while opposing Temporal workflow 'compute-properties-workflow-workspace-1' has status '${status}'. Complete the compute-mode transition explicitly, then rerun; managed bootstrap did not terminate any workflow.`,
-      );
-      expect(getWorkflowStatus).toHaveBeenCalledTimes(1);
-      expect(getWorkflowStatus).toHaveBeenCalledWith({
-        workflowId: "compute-properties-workflow-workspace-1",
-      });
-      expect(startGlobalCompute).not.toHaveBeenCalled();
-      expect(startGlobalCron).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    "compute-properties-queue-workflow",
-    "compute-properties-scheduler-workflow",
-  ] as const)(
-    "does not terminate shared global workflow %s when selecting workspace compute",
-    async (conflictingWorkflowId) => {
-      const getWorkflowStatus = jest.fn(
-        ({ workflowId }: { workflowId: string }) =>
-          Promise.resolve<"RUNNING" | null>(
-            workflowId === conflictingWorkflowId ? "RUNNING" : null,
-          ),
-      );
-      const startWorkspaceCompute = jest.fn(() => Promise.resolve());
-      const startGlobalCron = jest.fn(() => Promise.resolve());
-      const dependencies = createDependencies({
-        getWorkflowStatus,
-        startGlobalCron,
-        startWorkspaceCompute,
-      });
-
-      await expect(
-        managedBootstrap(MANAGED_PARAMS, dependencies),
-      ).rejects.toThrow(
-        `Managed bootstrap cannot start workspace compute workflows while opposing Temporal workflow '${conflictingWorkflowId}' has status 'RUNNING'. Complete the compute-mode transition explicitly, then rerun; managed bootstrap did not terminate any workflow.`,
-      );
-      expect(getWorkflowStatus).toHaveBeenCalledWith({
-        workflowId: conflictingWorkflowId,
-      });
-      expect(startWorkspaceCompute).not.toHaveBeenCalled();
-      expect(startGlobalCron).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    "COMPLETED",
-    "FAILED",
-    "CANCELLED",
-    "TERMINATED",
-    "TIMED_OUT",
-  ] as const)(
-    "allows a new compute mode after an opposing workflow is %s",
-    async (status) => {
-      const startGlobalCompute = jest.fn(() => Promise.resolve());
-      const dependencies = createDependencies({
-        getWorkflowStatus: () => Promise.resolve(status),
-        resolveGlobalCompute: () => Promise.resolve(true),
-        startGlobalCompute,
-      });
-
-      await expect(
-        managedBootstrap(MANAGED_PARAMS, dependencies),
-      ).resolves.toMatchObject({ workspaceId: "workspace-1" });
-      expect(startGlobalCompute).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it("sanitizes compute-mode status lookup failures before starting workflows", async () => {
-    const credentialSentinel = "TEMPORAL-STATUS-CREDENTIAL-SENTINEL";
-    const startWorkspaceCompute = jest.fn(() => Promise.resolve());
-    const dependencies = createDependencies({
-      getWorkflowStatus: () =>
-        Promise.reject(
-          new Error(
-            `authentication failed for temporal://${credentialSentinel}@example.invalid`,
-          ),
-        ),
-      startWorkspaceCompute,
-    });
-
-    const failure = await getFailure(
-      managedBootstrap(MANAGED_PARAMS, dependencies),
-    );
-
-    expect(failure.message).toBe(
-      "Managed bootstrap failed while checking Temporal workflow 'compute-properties-queue-workflow' for a compute-mode conflict. Provider authentication failed.",
-    );
-    expect(`${failure.message}\n${failure.stack ?? ""}`).not.toContain(
-      credentialSentinel,
-    );
-    expect(failure.message).not.toContain("temporal://");
     expect(startWorkspaceCompute).not.toHaveBeenCalled();
   });
 
