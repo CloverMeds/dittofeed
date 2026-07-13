@@ -351,10 +351,14 @@ describe("managedBootstrap", () => {
   it("returns the same workspace and workflow contract on rerun", async () => {
     const startedWorkflowIds = new Set<string>();
     const dependencies = createDependencies({
-      describeWorkflow: ({ workflowId }) =>
-        Promise.resolve(
-          startedWorkflowIds.has(workflowId) ? "RUNNING" : "NOT_FOUND",
-        ),
+      describeWorkflow: ({ workflowId }) => {
+        if (!startedWorkflowIds.has(workflowId)) {
+          throw new Error(
+            `Workflow '${workflowId}' was described before it started.`,
+          );
+        }
+        return Promise.resolve("RUNNING");
+      },
       startGlobalCron: () => {
         startedWorkflowIds.add("global-cron-workflow");
         return Promise.resolve();

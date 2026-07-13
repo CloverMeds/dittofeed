@@ -25,7 +25,9 @@ import {
 import { createUserEventsTables } from "./userEvents/clickhouse";
 
 export interface ManagedBootstrapDependencies {
-  describeWorkflow: (params: { workflowId: string }) => Promise<string>;
+  describeWorkflow: (params: {
+    workflowId: string;
+  }) => Promise<WorkflowExecutionStatusName>;
   getWorkflowStatus: (params: {
     workflowId: string;
   }) => Promise<WorkflowExecutionStatusName | null>;
