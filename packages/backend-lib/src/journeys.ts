@@ -53,7 +53,6 @@ import {
   DeleteMessageTemplateRequest,
   EmailStats,
   EnrichedJourney,
-  EventType,
   HasStartedJourneyResource,
   InternalEventType,
   Journey,
@@ -201,13 +200,6 @@ export async function findManyJourneysUnsafe(
 
 const JourneyMessageStatsRow = Type.Object({
   journey_id: Type.String(),
-  node_id: Type.String(),
-  count: Type.String(),
-});
-
-const JourneyMessageEventStatsRow = Type.Object({
-  journey_id: Type.String(),
-  event: Type.String(),
   node_id: Type.String(),
   count: Type.String(),
 });
@@ -374,15 +366,15 @@ export async function getJourneyMessageStats({
   const statsMap = new Map<string, Map<string, Map<string, number>>>();
   await streamClickhouseQuery(resultsSet, (row) => {
     for (const i of row) {
-      const result = schemaValidateWithErr(i, JourneyMessageEventStatsRow);
-      if (result.isErr()) {
-        logger().error(
-          { err: result.error, workspaceId },
-          "Failed to validate row from clickhouse for journey message stats",
-        );
-        continue;
-      }
-      const item = result.value;
+      const item = i as {
+        journey_id: string;
+        // represents the last observed event for a given email
+        // so for example a clicked email will also have been opened and
+        // delivered
+        event: string;
+        node_id: string;
+        count: string;
+      };
       const journeyStats =
         statsMap.get(item.journey_id) ?? new Map<string, Map<string, number>>();
       const nodeStats =
@@ -716,7 +708,6 @@ function journeyTriggerCounter() {
 interface EventTriggerJourneyDetails {
   journeyId: string;
   journeyName: string;
-  journeyStatus: string;
   event: string;
   definition: JourneyDefinition;
 }
@@ -774,20 +765,13 @@ export function triggerEventEntryJourneysFactory({
           journeyId: journey.id,
           definition: journey.definition,
           journeyName: journey.name,
-          journeyStatus: journey.status,
         };
       });
       journeyCache.set(workspaceId, journeyDetails);
     }
 
     const starts: Promise<unknown>[] = journeyDetails.flatMap(
-      ({
-        journeyId,
-        journeyName,
-        journeyStatus,
-        event: journeyEvent,
-        definition,
-      }) => {
+      ({ journeyId, journeyName, event: journeyEvent, definition }) => {
         const isMatch = doesEventNameMatch({
           pattern: journeyEvent,
           event: triggerEvent.event,
@@ -819,11 +803,7 @@ export function triggerEventEntryJourneysFactory({
           userId,
           journeyId,
           event: triggerEvent,
-          eventType: EventType.Track,
           definition,
-          eventNameMatchesEntry: isMatch,
-          journeyName,
-          journeyStatus,
         });
       },
     );

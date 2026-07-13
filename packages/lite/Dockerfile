@@ -55,6 +55,10 @@ WORKDIR /service
 
 RUN yarn set version 4.1.1
 
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /service/production_node_modules ./node_modules
 COPY --from=builder /service/package.json ./package.json
 COPY --from=builder /service/*.json /service/yarn.lock /service/.yarnrc.yml ./

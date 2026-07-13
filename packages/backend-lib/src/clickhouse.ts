@@ -162,7 +162,10 @@ function getClientConfig({
       max_memory_usage: clickhouseMaxMemoryUsage,
     },
   };
-  logger().debug({ clientConfig }, "ClickHouse client config");
+  logger().debug(
+    { clientConfig: { ...clientConfig, password: "****" } },
+    "ClickHouse client config",
+  );
   if (enableSession) {
     const sessionId = getChCompatibleUuid();
     logger().info(

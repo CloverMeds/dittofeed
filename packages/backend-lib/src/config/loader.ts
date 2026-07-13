@@ -1,7 +1,6 @@
 import { Static, TSchema } from "@sinclair/typebox";
 import { constantCase } from "change-case";
 import dotenv from "dotenv";
-import { unwrap } from "isomorphic-lib/src/resultHandling/resultUtils";
 import { schemaValidate } from "isomorphic-lib/src/resultHandling/schemaValidation";
 import path from "path";
 
@@ -31,8 +30,18 @@ export function loadConfig<S extends TSchema, C = Static<S>>({
     unknownConfig[key] = process.env[constantCase(key)];
   }
 
-  const parsed = unwrap(schemaValidate(unknownConfig, schema));
-  return transform(parsed);
+  const parsed = schemaValidate(unknownConfig, schema);
+  if (parsed.isErr()) {
+    const safeErrors = parsed.error.map(
+      ({ message, path: errorPath, type }) => ({
+        message,
+        path: errorPath,
+        type,
+      }),
+    );
+    throw new Error(`Invalid configuration: ${JSON.stringify(safeErrors)}`);
+  }
+  return transform(parsed.value);
 }
 
 export function setConfigOnEnv(configForEnv: object) {

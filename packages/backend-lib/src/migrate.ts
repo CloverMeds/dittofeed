@@ -25,6 +25,23 @@ interface DatabaseBootstrapPlan {
   checkExistingFirst?: boolean;
 }
 
+export interface PostgresClient {
+  connect(): Promise<void>;
+  end(): Promise<void>;
+  escapeIdentifier(value: string): string;
+  query(sql: string): Promise<unknown>;
+}
+
+type PostgresClientFactory = (connectionString: string) => PostgresClient;
+
+export interface BootstrapDatabaseForMigrationsParams {
+  mode: PostgresBootstrapMode;
+  database: string;
+  databaseUrl: string;
+  maintenanceDatabaseUrl: string;
+  clientFactory?: PostgresClientFactory;
+}
+
 export function getDatabaseBootstrapPlan(
   mode: PostgresBootstrapMode,
 ): DatabaseBootstrapPlan {
@@ -66,14 +83,19 @@ function getErrorCode(error: unknown): string | null {
   return typeof code === "string" ? code : null;
 }
 
-async function createDatabase() {
-  const client = new Client(databaseUrlWithoutName());
-  const { database } = config();
+async function createDatabase({
+  clientFactory,
+  database,
+  maintenanceDatabaseUrl,
+}: Pick<
+  Required<BootstrapDatabaseForMigrationsParams>,
+  "clientFactory" | "database" | "maintenanceDatabaseUrl"
+>) {
+  const client = clientFactory(maintenanceDatabaseUrl);
   try {
     await client.connect();
-    await client.query(`
-      CREATE DATABASE ${database}
-    `);
+    const escapedDatabase = client.escapeIdentifier(database);
+    await client.query(`CREATE DATABASE ${escapedDatabase}`);
   } catch (e) {
     if (getErrorCode(e) === DUPLICATE_DATABASE_CODE) {
       logger().info({ database }, "Database already exists");
@@ -89,8 +111,14 @@ function isMissingDatabaseError(error: unknown): boolean {
   return getErrorCode(error) === INVALID_CATALOG_NAME_CODE;
 }
 
-async function configuredDatabaseExists(): Promise<boolean> {
-  const client = new Client(config().databaseUrl);
+async function configuredDatabaseExists({
+  clientFactory,
+  databaseUrl,
+}: Pick<
+  Required<BootstrapDatabaseForMigrationsParams>,
+  "clientFactory" | "databaseUrl"
+>): Promise<boolean> {
+  const client = clientFactory(databaseUrl);
   try {
     await client.connect();
     await client.query("SELECT 1");
@@ -105,34 +133,46 @@ async function configuredDatabaseExists(): Promise<boolean> {
   }
 }
 
-async function requireConfiguredDatabase() {
-  const exists = await configuredDatabaseExists();
+async function requireConfiguredDatabase(
+  params: Required<BootstrapDatabaseForMigrationsParams>,
+) {
+  const exists = await configuredDatabaseExists(params);
   if (!exists) {
     throw new Error(
-      `Postgres bootstrap mode require-existing requires configured database '${config().database}' to already exist. Create it before running migrations or use DATABASE_BOOTSTRAP_MODE=create.`,
+      `Postgres bootstrap mode require-existing requires configured database '${params.database}' to already exist. Create it before running migrations or use DATABASE_BOOTSTRAP_MODE=create.`,
     );
   }
 }
 
-async function bootstrapDatabaseForMigrations() {
-  const mode = config().databaseBootstrapMode;
+export async function bootstrapDatabaseForMigrations({
+  clientFactory = (connectionString) => new Client(connectionString),
+  ...params
+}: BootstrapDatabaseForMigrationsParams): Promise<void> {
+  const resolvedParams: Required<BootstrapDatabaseForMigrationsParams> = {
+    ...params,
+    clientFactory,
+  };
+  const { mode } = resolvedParams;
   const plan = getDatabaseBootstrapPlan(mode);
 
   if (plan.requireExisting) {
-    await requireConfiguredDatabase();
+    await requireConfiguredDatabase(resolvedParams);
     return;
   }
 
-  if (plan.checkExistingFirst && (await configuredDatabaseExists())) {
+  if (
+    plan.checkExistingFirst &&
+    (await configuredDatabaseExists(resolvedParams))
+  ) {
     logger().info(
-      { database: config().database },
+      { database: resolvedParams.database },
       "Database already exists, skipping create database step",
     );
     return;
   }
 
   if (plan.createDatabase) {
-    await createDatabase();
+    await createDatabase(resolvedParams);
   }
 }
 
@@ -157,16 +197,26 @@ export async function findDrizzleFolder(dirname: string): Promise<string> {
   return migrationsFolder;
 }
 
-export async function publicDrizzleMigrate() {
+export async function publicDrizzleMigrate({
+  database = db(),
+}: {
+  database?: Parameters<typeof migrate>[0];
+} = {}) {
   const migrationsFolder = await findDrizzleFolder(__dirname);
 
   logger().info({ migrationsFolder }, "Running migrations");
-  await migrate(db(), {
+  await migrate(database, {
     migrationsFolder,
   });
 }
 
 export async function drizzleMigrate() {
-  await bootstrapDatabaseForMigrations();
+  const { database, databaseBootstrapMode, databaseUrl } = config();
+  await bootstrapDatabaseForMigrations({
+    mode: databaseBootstrapMode,
+    database,
+    databaseUrl,
+    maintenanceDatabaseUrl: databaseUrlWithoutName(),
+  });
   await publicDrizzleMigrate();
 }

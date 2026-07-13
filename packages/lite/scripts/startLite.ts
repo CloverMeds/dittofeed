@@ -4,7 +4,7 @@ import "@fastify/secure-session";
 import { Worker } from "@temporalio/worker";
 import { BOOTSTRAP_OPTIONS } from "admin-cli/src/bootstrap";
 import { requestToSessionValue } from "api/src/buildApp/requestContext";
-import backendConfig from "backend-lib/src/config";
+import backendConfig, { redactConfig } from "backend-lib/src/config";
 import { startBootstrapWorkflow } from "backend-lib/src/journeys/bootstrap/lifecycle";
 import logger from "backend-lib/src/logger";
 import next from "next";
@@ -51,10 +51,7 @@ function findPackagesDir(fullPath: string): string {
 async function startLite() {
   if (backendConfig().logConfig) {
     logger().info(
-      {
-        ...backendConfig(),
-        ...liteConfig,
-      },
+      redactConfig({ ...backendConfig(), ...liteConfig() }),
       "Initialized with config",
     );
   }

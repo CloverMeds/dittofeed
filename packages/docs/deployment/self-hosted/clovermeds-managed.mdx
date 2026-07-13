@@ -2,68 +2,100 @@
 title: CloverMeds Managed AWS Deployment
 ---
 
-This page documents the CloverMeds fork deployment mode for running Dittofeed
-against existing Pulumi-managed infrastructure rather than the bundled local
-Postgres, ClickHouse, and Temporal services.
+This fork provides a one-off, source-owned setup command for deployments where
+Postgres and ClickHouse databases already exist and database creation is owned
+by infrastructure. It does not publish or promote an image; build the command
+from this source revision and pin the resulting image by digest.
 
-## Managed Dependency Expectations
+## Managed setup contract
 
-CloverMeds production deployments use existing managed services:
+Run the compiled command from the Lite image:
 
-- Postgres is an existing RDS database.
-- ClickHouse is an existing managed ClickHouse service.
-- Temporal is Temporal Cloud.
-- Secrets are provided by the deployment environment.
+```bash
+node ./packages/admin-cli/dist/scripts/cli.js managed-bootstrap \
+  --workspace-name=Default
+```
 
-The bootstrap path is still Dittofeed's real bootstrap path. It runs Postgres
-migrations, creates or repairs ClickHouse databases and tables idempotently,
-upserts workspace/default resources/providers/templates, and starts or reuses
-compute/global cron workflows safely.
+The dedicated admin image exposes the same command through its entrypoint:
 
-Do not patch compiled JavaScript files after image build. Temporal Cloud
-connection settings are handled in source through the environment variables
-below.
+```bash
+./admin.sh managed-bootstrap --workspace-name=Default
+```
 
-## Environment Variables
+The command runs these required phases sequentially and exits nonzero if any
+phase fails:
 
-| Variable                      | Value                                              | Notes                                                                                                                                     |
-| ----------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_BOOTSTRAP_MODE`     | `create`, `prefer-existing`, or `require-existing` | Defaults to `create`, which preserves upstream behavior.                                                                                  |
-| `TEMPORAL_API_KEY`            | Temporal Cloud API key                             | Enables API-key authenticated Temporal Cloud connections with TLS.                                                                        |
-| `TEMPORAL_TLS_CA`             | PEM CA bundle                                      | Optional CA bundle for Temporal TLS verification. If omitted while `TEMPORAL_API_KEY` is set, TLS is enabled with the system trust store. |
-| `TEMPORAL_NAMESPACE`          | Temporal Cloud namespace                           | Used for client namespace configuration and Temporal Cloud namespace metadata.                                                            |
-| `JOURNEY_TRIGGER_DIAGNOSTICS` | `true` or `false`                                  | Temporary sanitized journey trigger diagnostics. Defaults to `false`.                                                                     |
-| `BOOTSTRAP_EVENTS`            | `false`                                            | Required for CloverMeds production; demo/default events must not be seeded.                                                               |
+1. Run Drizzle migrations directly in the configured Postgres database. It
+   never connects to a maintenance database or issues `CREATE DATABASE`.
+2. Create Dittofeed tables and materialized views in the configured ClickHouse
+   database. It never issues `CREATE DATABASE`.
+3. Upsert the workspace and its default resources. This path never inserts the
+   demo events controlled by `BOOTSTRAP_EVENTS`.
+4. Start or reuse the workspace/global compute workflows and global cron.
+5. Describe every expected workflow and require its status to be `RUNNING`.
 
-## Postgres Bootstrap Modes
+Migrations, table/view DDL, workspace resources, and workflow IDs are designed
+to be safe on rerun. Keep `BOOTSTRAP=false`, `BOOTSTRAP_EVENTS=false`, and
+`BOOTSTRAP_WORKER=false` on the steady-state service; the managed command does
+not rely on those switches. The command creates a Root workspace only and does
+not accept feature mutations. Set `USE_GLOBAL_COMPUTED_PROPERTIES` before
+setup so workflow-mode resolution is stable and cannot hide a failed feature
+transition.
 
-`create` preserves upstream behavior. Bootstrap may connect to the maintenance
-database and create the configured database if it is missing, then run
-migrations.
+## Environment variables
 
-`prefer-existing` first connects directly to the configured database. If it
-exists, bootstrap skips the create-database step and runs migrations. If it is
-missing, bootstrap falls back to the upstream create behavior.
+| Variable                         | Value                                              | Contract                                                                                                                                              |
+| -------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                   | Existing managed Postgres database URL             | The managed command migrates this database directly; the role needs schema migration privileges but not `CREATEDB`.                                   |
+| `DATABASE_BOOTSTRAP_MODE`        | `create`, `prefer-existing`, or `require-existing` | Controls the standard bootstrap path. Use `require-existing` in managed deployments. The managed command is existing-only regardless of this setting. |
+| `CLICKHOUSE_HOST`                | Managed ClickHouse HTTPS endpoint                  | Required.                                                                                                                                             |
+| `CLICKHOUSE_DATABASE`            | Existing ClickHouse database                       | The role needs table/materialized-view DDL in this database but not database-creation privileges.                                                     |
+| `CLICKHOUSE_USER`                | Restricted ClickHouse user                         | Required.                                                                                                                                             |
+| `CLICKHOUSE_PASSWORD`            | Restricted ClickHouse password                     | Required.                                                                                                                                             |
+| `TEMPORAL_ADDRESS`               | Temporal frontend address                          | Required for a non-default endpoint, including Temporal Cloud.                                                                                        |
+| `TEMPORAL_NAMESPACE`             | Temporal namespace                                 | Passed to clients/workers and as connection metadata when non-default.                                                                                |
+| `TEMPORAL_API_KEY`               | Temporal Cloud API key                             | Secret. When present, TLS is always enabled. Never written to config logs.                                                                            |
+| `TEMPORAL_TLS`                   | `true` or `false`                                  | Enables TLS without an API key. An API key still implies TLS when this is `false` or unset.                                                           |
+| `TEMPORAL_TLS_CA`                | Inline PEM CA bundle                               | Optional custom server root. Its presence also enables TLS. Mutually exclusive with `TEMPORAL_TLS_CA_PATH`.                                           |
+| `TEMPORAL_TLS_CA_PATH`           | Path to a PEM CA bundle                            | Optional custom server root. Its presence enables TLS, and the command fails if the path cannot be read. Mutually exclusive with `TEMPORAL_TLS_CA`.   |
+| `TEMPORAL_CONNECTION_TIMEOUT`    | Milliseconds                                       | Applied to JavaScript client connections. Temporal SDK 1.14.1 does not expose this option on native worker connections.                               |
+| `USE_GLOBAL_COMPUTED_PROPERTIES` | `true` or `false`                                  | Selects global or per-workspace compute before setup. The managed command does not mutate this workspace feature.                                     |
+| `BOOTSTRAP_EVENTS`               | `false`                                            | Required for the steady-state CloverMeds environment; the managed command never seeds demo events.                                                    |
 
-`require-existing` is the CloverMeds production mode. Bootstrap connects
-directly to `DATABASE_NAME` or the database name from `DATABASE_URL` and fails
-clearly if it is missing. This mode does not require `CREATE DATABASE`
-privileges because it never attempts to create the database.
+## Temporal TLS and trust
 
-## Temporal Cloud
+The API, Lite app, setup command, and every worker task queue share the same
+source-owned connection option builder.
 
-Set `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, and `TEMPORAL_API_KEY` for
-Temporal Cloud. When `TEMPORAL_API_KEY` is present, Dittofeed enables TLS,
-sends the API key through the Temporal SDK API-key option, includes namespace
-metadata, and skips namespace bootstrap because Temporal Cloud namespaces are
-managed outside the application.
+- `TEMPORAL_API_KEY` implies TLS and uses the SDK API-key option.
+- `TEMPORAL_TLS=true` enables server TLS without API-key authentication.
+- Either custom CA setting also enables TLS, so it cannot be silently ignored.
+- With neither custom CA setting, JavaScript clients use Node's bundled public
+  roots while native workers use the SDK's platform-native roots. This SDK
+  distinction is deliberate.
+- Set exactly one custom CA source when private trust is required. Inline CA
+  whitespace is trimmed; an empty inline value uses each SDK's default roots.
+  A configured blank path, a missing/unreadable path target, or two configured
+  CA sources is a fatal configuration error.
+- For identical API/setup/worker trust—or an OS-added/private root—set
+  `TEMPORAL_TLS_CA_PATH=/etc/ssl/certs/ca-certificates.crt`. The source image
+  Dockerfiles install that bundle, and the shared builder injects its bytes
+  into both JavaScript and native connections.
+- Namespace metadata is sent for every non-default namespace, independently of
+  whether API-key authentication is used.
 
-## Journey Trigger Diagnostics
+This deliberately replaces the old derived-image compiled patch. The old patch
+read `TEMPORAL_TLS_CA_PATH`, injected CA bytes, and supported
+`TEMPORAL_TLS=true`; those behaviors now have first-class source equivalents.
+The default public-trust case uses each SDK's `tls: true` contract. Set the CA
+path explicitly when the old patch's injected OS-bundle behavior is required.
 
-`JOURNEY_TRIGGER_DIAGNOSTICS=true` enables temporary logs for event-entry
-journey triggering. The diagnostics include event type/name, workspace ID,
-journey ID/name/status, entry node type and configured event or segment,
-event-name match result, and `signalWithStart` success/failure.
+## Required external Gate 0 evidence
 
-Diagnostics do not log user traits, raw message bodies, email, phone, name, or
-PHI. Disable this flag after the journey-triggering investigation is complete.
+Before production promotion, run this exact compiled command twice with
+CloverMeds-equivalent restricted Postgres and ClickHouse roles, prove the
+expected workflows against Temporal Cloud, and smoke-test the exact API and
+worker commands from the built image. Also rehearse upgrade, database
+backup/restore, image rollback, and production canary/soak. Keep the existing
+patched image and external managed-bootstrap shim available for rollback until
+that evidence and explicit human approval exist.

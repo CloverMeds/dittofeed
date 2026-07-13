@@ -1,4 +1,4 @@
-import backendConfig from "backend-lib/src/config";
+import backendConfig, { redactConfig } from "backend-lib/src/config";
 
 import config from "../src/config";
 import { initApiOpenTelemetry } from "../src/openTelemetry";
@@ -20,10 +20,7 @@ async function start() {
     const logger = (await import("backend-lib/src/logger")).default;
 
     logger().info(
-      {
-        ...backendConfig(),
-        ...apiConfig,
-      },
+      redactConfig({ ...backendConfig(), ...apiConfig }),
       "Initialized with config",
     );
   }

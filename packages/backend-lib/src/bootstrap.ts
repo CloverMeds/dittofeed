@@ -304,9 +304,9 @@ export async function bootstrapPostgres({
     upsertSubscriptionSecret({
       workspaceId,
     }),
-    ...getDefaultMessageTemplates({
-      workspaceId,
-    }).map(upsertMessageTemplate),
+    ...getDefaultMessageTemplates({ workspaceId }).map((template) =>
+      upsertMessageTemplate(template).then(unwrap),
+    ),
   ]);
   const testEmailProvider = emailProviders.find(
     (ep) => ep.type === EmailProviderType.Test,
@@ -322,14 +322,14 @@ export async function bootstrapPostgres({
       name: `${workspaceName} - Email`,
       type: SubscriptionGroupType.OptOut,
       channel: ChannelType.Email,
-    }),
+    }).then(unwrap),
     upsertSubscriptionGroup({
       workspaceId,
       id: uuidv5("sms-subscription-group", workspaceId),
       name: `${workspaceName} - SMS`,
       type: SubscriptionGroupType.OptOut,
       channel: ChannelType.Sms,
-    }),
+    }).then(unwrap),
     testEmailProvider
       ? insert({
           table: dbDefaultEmailProvider,
@@ -481,9 +481,10 @@ async function insertDefaultEvents({ workspaceId }: { workspaceId: string }) {
 
 function handleErrorFactory(message: string) {
   return function handleError(e: unknown) {
-    logger().error({ err: e }, message);
+    const error = e as Error;
+    logger().error({ err: error }, message);
     if (config().bootstrapSafe) {
-      throw e;
+      throw error;
     }
   };
 }

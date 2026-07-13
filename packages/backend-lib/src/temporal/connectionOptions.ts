@@ -1,72 +1,99 @@
+import { readFileSync } from "node:fs";
+
 import { ConnectionOptions } from "@temporalio/client";
 import { NativeConnectionOptions } from "@temporalio/worker";
 
-import { Config } from "../config";
+interface TemporalConnectionConfig {
+  temporalAddress: string;
+  temporalApiKey?: string;
+  temporalConnectionTimeout?: number;
+  temporalNamespace: string;
+  temporalTls?: boolean;
+  temporalTlsCa?: string;
+  temporalTlsCaPath?: string;
+}
 
-type TemporalConnectionConfig = Pick<
-  Config,
-  | "temporalAddress"
-  | "temporalApiKey"
-  | "temporalConnectionTimeout"
-  | "temporalNamespace"
-  | "temporalTlsCa"
->;
+interface TemporalCommonConnectionOptions {
+  address: string;
+  apiKey?: string;
+  metadata?: ConnectionOptions["metadata"];
+  tls?: ConnectionOptions["tls"];
+}
 
-export function getTemporalConnectionOptions({
-  temporalAddress,
+function getTemporalTlsOptions({
   temporalApiKey,
-  temporalConnectionTimeout,
-  temporalNamespace,
+  temporalTls,
   temporalTlsCa,
-}: TemporalConnectionConfig): ConnectionOptions {
-  const options: ConnectionOptions = {
+  temporalTlsCaPath,
+}: TemporalConnectionConfig): ConnectionOptions["tls"] {
+  const inlineCa = temporalTlsCa?.trim();
+  const caPath = temporalTlsCaPath?.trim();
+  if (temporalTlsCaPath !== undefined && !caPath) {
+    throw new Error("TEMPORAL_TLS_CA_PATH must not be blank");
+  }
+  if (inlineCa && caPath) {
+    throw new Error(
+      "Configure only one of TEMPORAL_TLS_CA and TEMPORAL_TLS_CA_PATH",
+    );
+  }
+
+  const customCaConfigured =
+    temporalTlsCa !== undefined || temporalTlsCaPath !== undefined;
+  if (!temporalApiKey && !temporalTls && !customCaConfigured) {
+    return undefined;
+  }
+
+  let serverRootCACertificate: Uint8Array | undefined;
+  if (inlineCa) {
+    serverRootCACertificate = new TextEncoder().encode(inlineCa);
+  } else if (caPath) {
+    try {
+      serverRootCACertificate = Uint8Array.from(readFileSync(caPath));
+    } catch {
+      throw new Error("Unable to read TEMPORAL_TLS_CA_PATH");
+    }
+  }
+  return serverRootCACertificate ? { serverRootCACertificate } : true;
+}
+
+function getTemporalCommonConnectionOptions(
+  connectionConfig: TemporalConnectionConfig,
+): TemporalCommonConnectionOptions {
+  const { temporalAddress, temporalApiKey, temporalNamespace } =
+    connectionConfig;
+  const options: TemporalCommonConnectionOptions = {
     address: temporalAddress,
   };
 
-  if (temporalConnectionTimeout !== undefined) {
-    options.connectTimeout = temporalConnectionTimeout;
+  if (temporalApiKey) {
+    options.apiKey = temporalApiKey;
   }
-
-  if (!temporalApiKey) {
-    return options;
+  if (temporalNamespace !== "default") {
+    options.metadata = {
+      "temporal-namespace": temporalNamespace,
+    };
   }
-
-  options.apiKey = temporalApiKey;
-  options.metadata = {
-    "temporal-namespace": temporalNamespace,
-  };
-  options.tls = temporalTlsCa
-    ? {
-        serverRootCACertificate: new TextEncoder().encode(temporalTlsCa),
-      }
-    : true;
+  const tls = getTemporalTlsOptions(connectionConfig);
+  if (tls !== undefined) {
+    options.tls = tls;
+  }
 
   return options;
 }
 
-export function getTemporalNativeConnectionOptions({
-  temporalAddress,
-  temporalApiKey,
-  temporalNamespace,
-  temporalTlsCa,
-}: TemporalConnectionConfig): NativeConnectionOptions {
-  const options: NativeConnectionOptions = {
-    address: temporalAddress,
-  };
-
-  if (!temporalApiKey) {
-    return options;
+export function getTemporalConnectionOptions(
+  connectionConfig: TemporalConnectionConfig,
+): ConnectionOptions {
+  const options: ConnectionOptions =
+    getTemporalCommonConnectionOptions(connectionConfig);
+  if (connectionConfig.temporalConnectionTimeout !== undefined) {
+    options.connectTimeout = connectionConfig.temporalConnectionTimeout;
   }
-
-  options.apiKey = temporalApiKey;
-  options.metadata = {
-    "temporal-namespace": temporalNamespace,
-  };
-  options.tls = temporalTlsCa
-    ? {
-        serverRootCACertificate: new TextEncoder().encode(temporalTlsCa),
-      }
-    : true;
-
   return options;
+}
+
+export function getTemporalNativeConnectionOptions(
+  connectionConfig: TemporalConnectionConfig,
+): NativeConnectionOptions {
+  return getTemporalCommonConnectionOptions(connectionConfig);
 }

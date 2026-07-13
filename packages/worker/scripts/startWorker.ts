@@ -1,4 +1,4 @@
-import backendConfig from "backend-lib/src/config";
+import backendConfig, { redactConfig } from "backend-lib/src/config";
 import logger from "backend-lib/src/logger";
 
 import { buildWorker } from "../src/buildWorker";
@@ -10,10 +10,7 @@ async function run() {
 
   if (backendConfig().logConfig) {
     logger().info(
-      {
-        ...backendConfig(),
-        ...workerConfig,
-      },
+      redactConfig({ ...backendConfig(), ...workerConfig }),
       "Initialized with config",
     );
   }

@@ -67,7 +67,9 @@ export async function startComputePropertiesWorkflow({
         },
         "Compute properties workflow already started.",
       );
+      return;
     }
+    throw e;
   }
 }
 
@@ -93,6 +95,7 @@ export async function startGlobalCron({
         },
         "Failed to start global cron.",
       );
+      throw e;
     }
   }
 }
@@ -256,8 +259,12 @@ export async function startQueueWorkflow({
   }
 }
 
-export async function startComputePropertiesWorkflowGlobal() {
-  const client = await connectWorkflowClient();
+export async function startComputePropertiesWorkflowGlobal({
+  client: clientArg,
+}: {
+  client?: WorkflowClient;
+} = {}) {
+  const client = clientArg ?? (await connectWorkflowClient());
   await startQueueWorkflow({ client });
   try {
     await client.start(computePropertiesSchedulerWorkflow, {

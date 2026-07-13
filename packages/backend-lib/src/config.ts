@@ -33,15 +33,15 @@ const BaseRawConfigProps = {
   temporalConnectionTimeout: Type.Optional(
     Type.String({ format: "naturalNumber" }),
   ),
+  temporalTls: Type.Optional(BoolStr),
   temporalTlsCa: Type.Optional(Type.String()),
+  temporalTlsCaPath: Type.Optional(Type.String()),
   clickhouseHost: Type.String(),
   clickhouseProtocol: Type.Optional(Type.String()),
   clickhouseDatabase: Type.Optional(Type.String()),
   clickhouseUser: Type.String(),
   clickhousePassword: Type.String(),
-  defaultUserJourneyMaxAttempts: Type.Optional(
-    Type.String({ format: "naturalNumber" }),
-  ),
+  defaultUserJourneyMaxAttempts: Type.Optional(Type.String({ format: "naturalNumber" })),
   kafkaBrokers: Type.Optional(Type.String()),
   kafkaUsername: Type.Optional(Type.String()),
   kafkaPassword: Type.Optional(Type.String()),
@@ -64,7 +64,6 @@ const BaseRawConfigProps = {
   bootstrapEvents: Type.Optional(BoolStr),
   bootstrapWorker: Type.Optional(BoolStr),
   bootstrapSafe: Type.Optional(BoolStr),
-  journeyTriggerDiagnostics: Type.Optional(BoolStr),
   defaultIdUserPropertyId: Type.Optional(Type.String()),
   defaultAnonymousIdIdUserPropertyId: Type.Optional(Type.String()),
   defaultEmailUserPropertyId: Type.Optional(Type.String()),
@@ -340,7 +339,9 @@ export type Config = Overwrite<
     temporalApiKey?: string;
     temporalNamespace: string;
     temporalConnectionTimeout?: number;
+    temporalTls: boolean;
     temporalTlsCa?: string;
+    temporalTlsCaPath?: string;
     trackDashboard: boolean;
     useGlobalComputedProperties?: boolean;
     userEventsTopicName: string;
@@ -362,7 +363,6 @@ export type Config = Overwrite<
     clickhouseColdStorageMaxExecutionTime?: number;
     broadcastSendMessagesMaxAttempts: number;
     defaultGetSegmentAndEventDetailsMaxAttempts: number;
-    journeyTriggerDiagnostics: boolean;
   }
 > & {
   defaultUserEventsTableVersion: string;
@@ -370,7 +370,7 @@ export type Config = Overwrite<
   apiBase: string;
 };
 
-export const SECRETS = new Set<keyof Config>([
+export const SECRETS: ReadonlySet<string> = new Set<keyof Config>([
   "databasePassword",
   "clickhousePassword",
   "kafkaPassword",
@@ -384,7 +384,17 @@ export const SECRETS = new Set<keyof Config>([
   "databaseUrl", // Contains password
   "dashboardWriteKey", // Potentially sensitive
   "temporalApiKey",
+  "temporalTlsCa",
 ]);
+
+export function redactConfig(configValue: object): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(configValue).map(([key, value]) => [
+      key,
+      SECRETS.has(key) ? "****" : value,
+    ]),
+  );
+}
 
 const defaultDbParams: Record<string, string> = {
   connect_timeout: "60",
@@ -557,14 +567,6 @@ function parseRawConfig(rawConfig: RawConfig): Config {
     databaseParams,
   } = parseDatabaseUrl(rawConfig);
   const nodeEnv = rawConfig.nodeEnv ?? NodeEnvEnum.Development;
-  let defaultUserJourneyMaxAttempts: number | undefined;
-  if (rawConfig.defaultUserJourneyMaxAttempts !== undefined) {
-    defaultUserJourneyMaxAttempts = parseInt(
-      rawConfig.defaultUserJourneyMaxAttempts,
-    );
-  } else if (nodeEnv === NodeEnvEnum.Test) {
-    defaultUserJourneyMaxAttempts = 1;
-  }
   const writeMode: WriteMode =
     rawConfig.writeMode ??
     (rawConfig.nodeEnv === NodeEnvEnum.Test ? "ch-sync" : "ch-async");
@@ -669,7 +671,9 @@ function parseRawConfig(rawConfig: RawConfig): Config {
       rawConfig.userEventsTopicName ?? "dittofeed-user-events",
     temporalNamespace: rawConfig.temporalNamespace ?? "default",
     temporalApiKey: rawConfig.temporalApiKey,
+    temporalTls: rawConfig.temporalTls === "true",
     temporalTlsCa: rawConfig.temporalTlsCa,
+    temporalTlsCaPath: rawConfig.temporalTlsCaPath,
     temporalConnectionTimeout: rawConfig.temporalConnectionTimeout
       ? parseInt(rawConfig.temporalConnectionTimeout)
       : undefined,
@@ -821,13 +825,14 @@ function parseRawConfig(rawConfig: RawConfig): Config {
       rawConfig.broadcastSendMessagesMaxAttempts,
       5,
     ),
-    defaultUserJourneyMaxAttempts,
+    defaultUserJourneyMaxAttempts: rawConfig.defaultUserJourneyMaxAttempts !== undefined ? parseInt(
+      rawConfig.defaultUserJourneyMaxAttempts,
+    ) : (nodeEnv === NodeEnvEnum.Test ? 1 : undefined),
     defaultGetSegmentAndEventDetailsMaxAttempts: parseMaxAttempts(
       rawConfig.defaultGetSegmentAndEventDetailsMaxAttempts,
       nodeEnv === NodeEnvEnum.Test ? 1 : 10,
     ),
     databaseBootstrapMode: rawConfig.databaseBootstrapMode ?? "create",
-    journeyTriggerDiagnostics: rawConfig.journeyTriggerDiagnostics === "true",
   };
 
   return parsedConfig;
