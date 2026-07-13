@@ -62,6 +62,7 @@ import {
   createUserEventsTables,
   dropKafkaTables,
 } from "./userEvents/clickhouse";
+import { getOrCreateWorkspaceDeliveryHoursPolicy } from "./workspaceDeliveryHoursPolicy";
 import { upsertWorkspace } from "./workspaces/createWorkspace";
 
 const DOMAIN_REGEX =
@@ -294,6 +295,7 @@ export async function bootstrapPostgres({
     getOrCreateEmailProviders({
       workspaceId,
     }),
+    getOrCreateWorkspaceDeliveryHoursPolicy({ workspaceId }).then(unwrap),
     ...userProperties.map((up) =>
       insert({
         table: dbUserProperty,

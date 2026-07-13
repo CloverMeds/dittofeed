@@ -79,6 +79,7 @@ import { immer } from "zustand/middleware/immer";
 
 import AdminApiKeyTable from "../components/adminApiKeyTable";
 import DashboardHead from "../components/dashboardHead";
+import DeliveryHoursSettings from "../components/deliveryHoursSettings";
 import ExternalLink from "../components/externalLink";
 import Fields from "../components/form/Fields";
 import {
@@ -300,6 +301,7 @@ export const getServerSideProps: GetServerSideProps<PropsWithInitialState> =
 
 const settingsSectionIds = {
   segmentSource: "segment-source",
+  deliveryHours: "delivery-hours",
   emailChannel: "email-channel",
   smsChannel: "sms-channel",
   webhookChannel: "webhook-channel",
@@ -328,6 +330,13 @@ function getMenuItems(authMode: string | undefined): MenuItemGroup[] {
           description: "",
         },
       ],
+    },
+    {
+      id: settingsSectionIds.deliveryHours,
+      title: "Delivery Hours",
+      type: "group",
+      children: [],
+      url: `/settings#${settingsSectionIds.deliveryHours}`,
     },
     {
       id: "message-channels",
@@ -2343,6 +2352,7 @@ function SettingsContents() {
   return (
     <>
       <SegmentIoConfig />
+      <DeliveryHoursSettings sectionId={settingsSectionIds.deliveryHours} />
       <MessageChannelsConfig />
       <AuthenticationSettings />
       <SubscriptionManagementSettings />

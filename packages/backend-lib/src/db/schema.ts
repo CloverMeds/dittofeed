@@ -12,6 +12,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import type { WorkspaceDeliveryHoursPolicy as WorkspaceDeliveryHoursPolicyConfig } from "isomorphic-lib/src/deliveryHours";
 
 export const computedPropertyType = pgEnum("ComputedPropertyType", [
   "Segment",
@@ -1138,6 +1139,33 @@ export const subscriptionManagementTemplate = pgTable(
       columns: [table.workspaceId],
       foreignColumns: [workspace.id],
       name: "SubscriptionManagementTemplate_workspaceId_fkey",
+    })
+      .onUpdate("cascade")
+      .onDelete("cascade"),
+  ],
+);
+
+export const workspaceDeliveryHoursPolicy = pgTable(
+  "WorkspaceDeliveryHoursPolicy",
+  {
+    id: uuid().primaryKey().defaultRandom().notNull(),
+    workspaceId: uuid().notNull(),
+    config: jsonb().$type<WorkspaceDeliveryHoursPolicyConfig>().notNull(),
+    createdAt: timestamp({ precision: 3, mode: "date" }).defaultNow().notNull(),
+    updatedAt: timestamp({ precision: 3, mode: "date" })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("WorkspaceDeliveryHoursPolicy_workspaceId_key").using(
+      "btree",
+      table.workspaceId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.workspaceId],
+      foreignColumns: [workspace.id],
+      name: "WorkspaceDeliveryHoursPolicy_workspaceId_fkey",
     })
       .onUpdate("cascade")
       .onDelete("cascade"),
