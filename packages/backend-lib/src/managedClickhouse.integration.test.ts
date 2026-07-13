@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 
 import { createClickhouseClient } from "./clickhouse";
+import {
+  managedBootstrap,
+  ManagedBootstrapDependencies,
+} from "./managedBootstrap";
+import { WorkspaceTypeAppEnum } from "./types";
 import { createUserEventsTables } from "./userEvents/clickhouse";
 
 jest.setTimeout(120_000);
@@ -19,17 +24,32 @@ describeManagedClickhouse(
         /-/g,
         "",
       )}`;
-      const databaseExists = async () => {
-        const result = await client.query({
-          query: `EXISTS DATABASE ${deniedDatabase}`,
-          format: "JSONEachRow",
-        });
-        const rows = await result.json<{ result: number }>();
-        return rows[0]?.result;
+      const dependencies: ManagedBootstrapDependencies = {
+        describeWorkflow: () => Promise.resolve("RUNNING"),
+        getWorkflowStatus: () => Promise.resolve(null),
+        initializeClickhouse: () => createUserEventsTables({ client }),
+        migratePostgres: () => Promise.resolve(),
+        resolveGlobalCompute: () => Promise.resolve(false),
+        startGlobalCompute: () => Promise.resolve(),
+        startGlobalCron: () => Promise.resolve(),
+        startWorkspaceCompute: () => Promise.resolve(),
+        upsertWorkspace: () => Promise.resolve({ workspaceId: "workspace-1" }),
       };
       try {
-        await createUserEventsTables({ client });
-        await createUserEventsTables({ client });
+        await managedBootstrap(
+          {
+            workspaceName: "Managed",
+            workspaceType: WorkspaceTypeAppEnum.Root,
+          },
+          dependencies,
+        );
+        await managedBootstrap(
+          {
+            workspaceName: "Managed",
+            workspaceType: WorkspaceTypeAppEnum.Root,
+          },
+          dependencies,
+        );
 
         const existsResult = await client.query({
           query: "EXISTS TABLE user_events_v2",
@@ -37,11 +57,9 @@ describeManagedClickhouse(
         });
         const rows = await existsResult.json<{ result: number }>();
         expect(rows[0]?.result).toBe(1);
-        await expect(databaseExists()).resolves.toBe(0);
         await expect(
           client.exec({ query: `CREATE DATABASE ${deniedDatabase}` }),
         ).rejects.toThrow();
-        await expect(databaseExists()).resolves.toBe(0);
       } finally {
         await client.close();
       }

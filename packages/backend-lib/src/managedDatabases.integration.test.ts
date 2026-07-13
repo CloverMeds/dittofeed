@@ -3,7 +3,12 @@ import { randomUUID } from "node:crypto";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Client, Pool } from "pg";
 
-import { publicDrizzleMigrate } from "./migrate";
+import {
+  managedBootstrap,
+  ManagedBootstrapDependencies,
+} from "./managedBootstrap";
+import { managedDrizzleMigrate } from "./migrate";
+import { WorkspaceTypeAppEnum } from "./types";
 
 jest.setTimeout(120_000);
 
@@ -56,14 +61,41 @@ describe("managed Postgres bootstrap with a restricted role", () => {
     }
   });
 
-  it("migrates the existing database twice without CREATEDB", async () => {
-    restrictedPool = new Pool({
-      connectionString: `postgresql://${roleName}:${password}@${postgresHost}:${postgresPort}/${databaseName}`,
-    });
+  it("runs the source-owned managed path twice against an existing NOCREATEDB database", async () => {
+    const restrictedDatabaseUrl = `postgresql://${roleName}:${password}@${postgresHost}:${postgresPort}/${databaseName}`;
+    restrictedPool = new Pool({ connectionString: restrictedDatabaseUrl });
     const database = drizzle({ client: restrictedPool });
+    const dependencies: ManagedBootstrapDependencies = {
+      describeWorkflow: () => Promise.resolve("RUNNING"),
+      getWorkflowStatus: () => Promise.resolve(null),
+      initializeClickhouse: () => Promise.resolve(),
+      migratePostgres: () =>
+        managedDrizzleMigrate({
+          database,
+          databaseName,
+          databaseUrl: restrictedDatabaseUrl,
+        }),
+      resolveGlobalCompute: () => Promise.resolve(false),
+      startGlobalCompute: () => Promise.resolve(),
+      startGlobalCron: () => Promise.resolve(),
+      startWorkspaceCompute: () => Promise.resolve(),
+      upsertWorkspace: () => Promise.resolve({ workspaceId: "workspace-1" }),
+    };
 
-    await publicDrizzleMigrate({ database });
-    await publicDrizzleMigrate({ database });
+    await managedBootstrap(
+      {
+        workspaceName: "Managed",
+        workspaceType: WorkspaceTypeAppEnum.Root,
+      },
+      dependencies,
+    );
+    await managedBootstrap(
+      {
+        workspaceName: "Managed",
+        workspaceType: WorkspaceTypeAppEnum.Root,
+      },
+      dependencies,
+    );
 
     const migrationTable = await restrictedPool.query<{ exists: boolean }>(
       "SELECT to_regclass('drizzle.__drizzle_migrations') IS NOT NULL AS exists",
@@ -74,5 +106,14 @@ describe("managed Postgres bootstrap with a restricted role", () => {
 
     expect(migrationTable.rows[0]?.exists).toBe(true);
     expect(privileges.rows[0]?.rolcreatedb).toBe(false);
+    if (!postgresAdmin) {
+      throw new Error("Postgres administrator was not initialized.");
+    }
+    const deniedDatabase = postgresAdmin.escapeIdentifier(
+      `${databaseName}_denied`,
+    );
+    await expect(
+      restrictedPool.query(`CREATE DATABASE ${deniedDatabase}`),
+    ).rejects.toMatchObject({ code: "42501" });
   });
 });

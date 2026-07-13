@@ -10,7 +10,7 @@ import { NodeClickHouseClient } from "@clickhouse/client/dist/client";
 import { NodeClickHouseClientConfigOptions } from "@clickhouse/client/dist/config";
 import { v4 as uuid } from "uuid";
 
-import config from "./config";
+import config, { redactConfig } from "./config";
 import logger from "./logger";
 import { withSpan } from "./openTelemetry";
 
@@ -163,7 +163,7 @@ function getClientConfig({
     },
   };
   logger().debug(
-    { clientConfig: { ...clientConfig, password: "****" } },
+    { clientConfig: redactConfig(clientConfig) },
     "ClickHouse client config",
   );
   if (enableSession) {

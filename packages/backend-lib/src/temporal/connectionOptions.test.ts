@@ -91,16 +91,55 @@ describe("temporal connection options", () => {
     });
   });
 
-  it("uses system trust for a blank inline CA", () => {
-    expect(
-      getTemporalConnectionOptions({
-        temporalAddress: "temporal.example.com:7233",
-        temporalNamespace: "default",
-        temporalTls: true,
-        temporalTlsCa: "  \n",
-      }),
-    ).toEqual({
+  it("treats a blank inline CA as unset for client and native connections", () => {
+    const connectionConfig = {
+      temporalAddress: "temporal.example.com:7233",
+      temporalNamespace: "default",
+      temporalTlsCa: "  \n",
+    };
+
+    expect(getTemporalConnectionOptions(connectionConfig)).toEqual({
       address: "temporal.example.com:7233",
+    });
+    expect(getTemporalNativeConnectionOptions(connectionConfig)).toEqual({
+      address: "temporal.example.com:7233",
+    });
+  });
+
+  it("uses system trust when explicit TLS accompanies a blank inline CA", () => {
+    const connectionConfig = {
+      temporalAddress: "temporal.example.com:7233",
+      temporalNamespace: "default",
+      temporalTls: true,
+      temporalTlsCa: "  \n",
+    };
+
+    expect(getTemporalConnectionOptions(connectionConfig)).toEqual({
+      address: "temporal.example.com:7233",
+      tls: true,
+    });
+    expect(getTemporalNativeConnectionOptions(connectionConfig)).toEqual({
+      address: "temporal.example.com:7233",
+      tls: true,
+    });
+  });
+
+  it("uses system trust when an API key accompanies a blank inline CA", () => {
+    const connectionConfig = {
+      temporalAddress: "temporal.example.com:7233",
+      temporalApiKey: "test-api-key",
+      temporalNamespace: "default",
+      temporalTlsCa: "  \n",
+    };
+
+    expect(getTemporalConnectionOptions(connectionConfig)).toEqual({
+      address: "temporal.example.com:7233",
+      apiKey: "test-api-key",
+      tls: true,
+    });
+    expect(getTemporalNativeConnectionOptions(connectionConfig)).toEqual({
+      address: "temporal.example.com:7233",
+      apiKey: "test-api-key",
       tls: true,
     });
   });

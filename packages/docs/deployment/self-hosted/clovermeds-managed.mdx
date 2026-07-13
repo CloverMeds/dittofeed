@@ -31,36 +31,46 @@ phase fails:
    database. It never issues `CREATE DATABASE`.
 3. Upsert the workspace and its default resources. This path never inserts the
    demo events controlled by `BOOTSTRAP_EVENTS`.
-4. Start or reuse the workspace/global compute workflows and global cron.
-5. Describe every expected workflow and require its status to be `RUNNING`.
+4. Check that no workflow from the opposing compute mode is still active.
+5. Start or reuse the selected workspace/global compute workflows and global
+   cron.
+6. Describe every expected workflow and require its status to be `RUNNING`.
 
 Migrations, table/view DDL, workspace resources, and workflow IDs are designed
 to be safe on rerun. Keep `BOOTSTRAP=false`, `BOOTSTRAP_EVENTS=false`, and
 `BOOTSTRAP_WORKER=false` on the steady-state service; the managed command does
 not rely on those switches. The command creates a Root workspace only and does
-not accept feature mutations. Set `USE_GLOBAL_COMPUTED_PROPERTIES` before
-setup so workflow-mode resolution is stable and cannot hide a failed feature
-transition.
+not accept feature mutations. Set `USE_GLOBAL_COMPUTED_PROPERTIES` before the
+first setup run and keep it stable.
+
+Changing compute mode is an explicit maintenance operation, not an in-place
+bootstrap action. Existing per-workspace workflows continue processing after a
+switch to global mode, and the shared global scheduler/queue can continue
+processing a workspace after a switch to per-workspace mode. Before starting a
+new mode, the command describes the opposing workflow IDs and exits nonzero if
+one is running or its state is not known to be terminal. It never terminates a
+workflow, especially a shared global workflow. Stop or migrate the old mode
+explicitly, verify it is terminal, and rerun the command.
 
 ## Environment variables
 
-| Variable                         | Value                                              | Contract                                                                                                                                              |
-| -------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                   | Existing managed Postgres database URL             | The managed command migrates this database directly; the role needs schema migration privileges but not `CREATEDB`.                                   |
-| `DATABASE_BOOTSTRAP_MODE`        | `create`, `prefer-existing`, or `require-existing` | Controls the standard bootstrap path. Use `require-existing` in managed deployments. The managed command is existing-only regardless of this setting. |
-| `CLICKHOUSE_HOST`                | Managed ClickHouse HTTPS endpoint                  | Required.                                                                                                                                             |
-| `CLICKHOUSE_DATABASE`            | Existing ClickHouse database                       | The role needs table/materialized-view DDL in this database but not database-creation privileges.                                                     |
-| `CLICKHOUSE_USER`                | Restricted ClickHouse user                         | Required.                                                                                                                                             |
-| `CLICKHOUSE_PASSWORD`            | Restricted ClickHouse password                     | Required.                                                                                                                                             |
-| `TEMPORAL_ADDRESS`               | Temporal frontend address                          | Required for a non-default endpoint, including Temporal Cloud.                                                                                        |
-| `TEMPORAL_NAMESPACE`             | Temporal namespace                                 | Passed to clients/workers and as connection metadata when non-default.                                                                                |
-| `TEMPORAL_API_KEY`               | Temporal Cloud API key                             | Secret. When present, TLS is always enabled. Never written to config logs.                                                                            |
-| `TEMPORAL_TLS`                   | `true` or `false`                                  | Enables TLS without an API key. An API key still implies TLS when this is `false` or unset.                                                           |
-| `TEMPORAL_TLS_CA`                | Inline PEM CA bundle                               | Optional custom server root. Its presence also enables TLS. Mutually exclusive with `TEMPORAL_TLS_CA_PATH`.                                           |
-| `TEMPORAL_TLS_CA_PATH`           | Path to a PEM CA bundle                            | Optional custom server root. Its presence enables TLS, and the command fails if the path cannot be read. Mutually exclusive with `TEMPORAL_TLS_CA`.   |
-| `TEMPORAL_CONNECTION_TIMEOUT`    | Milliseconds                                       | Applied to JavaScript client connections. Temporal SDK 1.14.1 does not expose this option on native worker connections.                               |
-| `USE_GLOBAL_COMPUTED_PROPERTIES` | `true` or `false`                                  | Selects global or per-workspace compute before setup. The managed command does not mutate this workspace feature.                                     |
-| `BOOTSTRAP_EVENTS`               | `false`                                            | Required for the steady-state CloverMeds environment; the managed command never seeds demo events.                                                    |
+| Variable                         | Value                                              | Contract                                                                                                                                                                                            |
+| -------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                   | Existing managed Postgres database URL             | The managed command migrates this database directly; the role needs schema migration privileges but not `CREATEDB`.                                                                                 |
+| `DATABASE_BOOTSTRAP_MODE`        | `create`, `prefer-existing`, or `require-existing` | Controls the standard bootstrap path. Use `require-existing` in managed deployments. The managed command is existing-only regardless of this setting.                                               |
+| `CLICKHOUSE_HOST`                | Managed ClickHouse HTTPS endpoint                  | Required.                                                                                                                                                                                           |
+| `CLICKHOUSE_DATABASE`            | Existing ClickHouse database                       | The role needs table/materialized-view DDL in this database but not database-creation privileges.                                                                                                   |
+| `CLICKHOUSE_USER`                | Restricted ClickHouse user                         | Required.                                                                                                                                                                                           |
+| `CLICKHOUSE_PASSWORD`            | Restricted ClickHouse password                     | Required.                                                                                                                                                                                           |
+| `TEMPORAL_ADDRESS`               | Temporal frontend address                          | Required for a non-default endpoint, including Temporal Cloud.                                                                                                                                      |
+| `TEMPORAL_NAMESPACE`             | Temporal namespace                                 | Passed to clients/workers and as connection metadata when non-default.                                                                                                                              |
+| `TEMPORAL_API_KEY`               | Temporal Cloud API key                             | Secret. When present, TLS is always enabled. Never written to config logs.                                                                                                                          |
+| `TEMPORAL_TLS`                   | `true` or `false`                                  | Enables TLS without an API key. An API key still implies TLS when this is `false` or unset.                                                                                                         |
+| `TEMPORAL_TLS_CA`                | Inline PEM CA bundle                               | Optional custom server root. A nonblank value also enables TLS. A blank/whitespace-only value is unset. Mutually exclusive with `TEMPORAL_TLS_CA_PATH`.                                             |
+| `TEMPORAL_TLS_CA_PATH`           | Path to a PEM CA bundle                            | Optional custom server root. Its presence enables TLS, and the command fails if the path cannot be read. Mutually exclusive with `TEMPORAL_TLS_CA`.                                                 |
+| `TEMPORAL_CONNECTION_TIMEOUT`    | Milliseconds                                       | Applied to JavaScript client connections. Temporal SDK 1.14.1 does not expose this option on native worker connections.                                                                             |
+| `USE_GLOBAL_COMPUTED_PROPERTIES` | `true` or `false`                                  | Selects global or per-workspace compute before setup. Changing it later requires an explicit workflow transition; the managed command fails on active opposing workflows and never terminates them. |
+| `BOOTSTRAP_EVENTS`               | `false`                                            | Required for the steady-state CloverMeds environment; the managed command never seeds demo events.                                                                                                  |
 
 ## Temporal TLS and trust
 
@@ -69,14 +79,17 @@ source-owned connection option builder.
 
 - `TEMPORAL_API_KEY` implies TLS and uses the SDK API-key option.
 - `TEMPORAL_TLS=true` enables server TLS without API-key authentication.
-- Either custom CA setting also enables TLS, so it cannot be silently ignored.
+- Either nonblank custom CA setting also enables TLS, so it cannot be silently
+  ignored.
 - With neither custom CA setting, JavaScript clients use Node's bundled public
   roots while native workers use the SDK's platform-native roots. This SDK
   distinction is deliberate.
 - Set exactly one custom CA source when private trust is required. Inline CA
-  whitespace is trimmed; an empty inline value uses each SDK's default roots.
-  A configured blank path, a missing/unreadable path target, or two configured
-  CA sources is a fatal configuration error.
+  whitespace is trimmed; an empty/whitespace-only inline value is treated as
+  unset and does not enable TLS. If an API key or `TEMPORAL_TLS=true`
+  independently enables TLS alongside a blank inline CA, each SDK uses its
+  default roots. A configured blank path, a missing/unreadable path target, or
+  two nonblank configured CA sources is a fatal configuration error.
 - For identical API/setup/worker trust—or an OS-added/private root—set
   `TEMPORAL_TLS_CA_PATH=/etc/ssl/certs/ca-certificates.crt`. The source image
   Dockerfiles install that bundle, and the shared builder injects its bytes

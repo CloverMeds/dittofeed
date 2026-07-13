@@ -210,6 +210,54 @@ export async function publicDrizzleMigrate({
   });
 }
 
+export interface ManagedDrizzleMigrateParams {
+  clientFactory?: PostgresClientFactory;
+  database?: Parameters<typeof migrate>[0];
+  databaseName?: string;
+  databaseUrl?: string;
+}
+
+export interface ManagedDrizzleMigrateDependencies {
+  bootstrapDatabase: typeof bootstrapDatabaseForMigrations;
+  migrateDatabase: typeof publicDrizzleMigrate;
+}
+
+/**
+ * Runs the managed bootstrap migration contract against an already-provisioned
+ * database. This deliberately ignores DATABASE_BOOTSTRAP_MODE: the managed
+ * path must never connect to a maintenance database or issue CREATE DATABASE.
+ */
+export async function managedDrizzleMigrate(
+  {
+    clientFactory,
+    database: migrationDatabase,
+    databaseName,
+    databaseUrl,
+  }: ManagedDrizzleMigrateParams = {},
+  dependencies: ManagedDrizzleMigrateDependencies = {
+    bootstrapDatabase: bootstrapDatabaseForMigrations,
+    migrateDatabase: publicDrizzleMigrate,
+  },
+) {
+  const backendConfig = databaseName && databaseUrl ? null : config();
+  const resolvedDatabaseName = databaseName ?? backendConfig?.database;
+  const resolvedDatabaseUrl = databaseUrl ?? backendConfig?.databaseUrl;
+  if (!resolvedDatabaseName || !resolvedDatabaseUrl) {
+    throw new Error("Managed Postgres database configuration is incomplete.");
+  }
+
+  await dependencies.bootstrapDatabase({
+    mode: PostgresBootstrapMode.RequireExisting,
+    database: resolvedDatabaseName,
+    databaseUrl: resolvedDatabaseUrl,
+    // RequireExisting never uses this URL. Supplying the configured URL keeps
+    // the no-maintenance-connection invariant explicit in this source path.
+    maintenanceDatabaseUrl: resolvedDatabaseUrl,
+    ...(clientFactory ? { clientFactory } : {}),
+  });
+  await dependencies.migrateDatabase({ database: migrationDatabase });
+}
+
 export async function drizzleMigrate() {
   const { database, databaseBootstrapMode, databaseUrl } = config();
   await bootstrapDatabaseForMigrations({

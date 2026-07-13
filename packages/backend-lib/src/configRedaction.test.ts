@@ -6,6 +6,7 @@ describe("config logging redaction", () => {
       temporalApiKey: "temporal-secret-value",
       temporalTlsCa: "internal-root-ca-body",
       databaseUrl: "postgres://user:database-secret@host/db",
+      password: "clickhouse-secret-value",
       temporalAddress: "namespace.tmprl.cloud:7233",
       temporalTlsCaPath: "/etc/ssl/certs/custom.pem",
     } satisfies Partial<Config>;
@@ -17,11 +18,13 @@ describe("config logging redaction", () => {
       temporalApiKey: "****",
       temporalTlsCa: "****",
       databaseUrl: "****",
+      password: "****",
       temporalAddress: "namespace.tmprl.cloud:7233",
       temporalTlsCaPath: "/etc/ssl/certs/custom.pem",
     });
     expect(serialized).not.toContain("temporal-secret-value");
     expect(serialized).not.toContain("database-secret");
     expect(serialized).not.toContain("internal-root-ca-body");
+    expect(serialized).not.toContain("clickhouse-secret-value");
   });
 });

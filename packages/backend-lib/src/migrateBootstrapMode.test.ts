@@ -1,6 +1,7 @@
 import {
   bootstrapDatabaseForMigrations,
   getDatabaseBootstrapPlan,
+  managedDrizzleMigrate,
   PostgresBootstrapMode,
   PostgresClient,
 } from "./migrate";
@@ -94,14 +95,15 @@ describe("postgres bootstrap mode", () => {
     expect(configuredClient.end.mock.calls).toHaveLength(1);
   });
 
-  it("falls back to an escaped CREATE DATABASE in prefer-existing mode", async () => {
+  it("uses the client's escaped identifier for CREATE DATABASE", async () => {
+    const databaseName = 'managed-"db; DROP DATABASE important';
     const configuredClient = createClient({
       connectError: Object.assign(new Error("database does not exist"), {
         code: "3D000",
       }),
     });
     const maintenanceClient = createClient({
-      escapedIdentifier: '"managed-db"',
+      escapedIdentifier: '"managed-""db; DROP DATABASE important"',
     });
     const clientFactory = jest
       .fn<PostgresClient, [string]>()
@@ -110,17 +112,17 @@ describe("postgres bootstrap mode", () => {
 
     await bootstrapDatabaseForMigrations({
       mode: PostgresBootstrapMode.PreferExisting,
-      database: "managed-db",
+      database: databaseName,
       databaseUrl: "postgres://restricted@postgres/managed-db",
       maintenanceDatabaseUrl: "postgres://creator@postgres/postgres",
       clientFactory,
     });
 
     expect(maintenanceClient.escapeIdentifier.mock.calls).toEqual([
-      ["managed-db"],
+      [databaseName],
     ]);
     expect(maintenanceClient.query.mock.calls).toEqual([
-      ['CREATE DATABASE "managed-db"'],
+      ['CREATE DATABASE "managed-""db; DROP DATABASE important"'],
     ]);
   });
 
@@ -139,5 +141,33 @@ describe("postgres bootstrap mode", () => {
         clientFactory: () => configuredClient,
       }),
     ).rejects.toBe(permissionError);
+  });
+
+  it("forces the managed migrator through require-existing before migrations", async () => {
+    const phases: string[] = [];
+    const bootstrapDatabase = jest.fn(() => {
+      phases.push("require-existing");
+      return Promise.resolve();
+    });
+    const migrateDatabase = jest.fn(() => {
+      phases.push("migrate");
+      return Promise.resolve();
+    });
+    const databaseUrl =
+      "postgresql://restricted:credential@example.invalid/managed";
+
+    await managedDrizzleMigrate(
+      { databaseName: "managed", databaseUrl },
+      { bootstrapDatabase, migrateDatabase },
+    );
+
+    expect(bootstrapDatabase).toHaveBeenCalledWith({
+      mode: PostgresBootstrapMode.RequireExisting,
+      database: "managed",
+      databaseUrl,
+      maintenanceDatabaseUrl: databaseUrl,
+    });
+    expect(migrateDatabase).toHaveBeenCalledWith({ database: undefined });
+    expect(phases).toEqual(["require-existing", "migrate"]);
   });
 });

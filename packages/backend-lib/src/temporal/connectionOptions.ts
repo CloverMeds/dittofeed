@@ -37,8 +37,7 @@ function getTemporalTlsOptions({
     );
   }
 
-  const customCaConfigured =
-    temporalTlsCa !== undefined || temporalTlsCaPath !== undefined;
+  const customCaConfigured = Boolean(inlineCa) || Boolean(caPath);
   if (!temporalApiKey && !temporalTls && !customCaConfigured) {
     return undefined;
   }
