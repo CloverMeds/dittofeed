@@ -74,29 +74,42 @@ describe("delivery hours settings", () => {
     });
   });
 
-  it.each(["UTC", "Etc/UTC", "US/Eastern", "Asia/Kolkata"])(
-    "accepts the valid IANA timezone %s",
-    (fallbackTimezone) => {
-      expect(
-        validateDeliveryHoursDraft({ ...validDraft, fallbackTimezone }),
-      ).toEqual({ valid: true, errors: {} });
-    },
-  );
+  it.each([
+    "UTC",
+    "GMT",
+    "CET",
+    "EST5EDT",
+    "Etc/UTC",
+    "US/Eastern",
+    "Asia/Kolkata",
+    "america/new_york",
+  ])("accepts the valid IANA timezone %s", (fallbackTimezone) => {
+    expect(
+      validateDeliveryHoursDraft({ ...validDraft, fallbackTimezone }),
+    ).toEqual({ valid: true, errors: {} });
+  });
 
-  it.each(["CST", "PST", "america/new_york"])(
-    "rejects the ambiguous or incorrectly cased timezone %s",
-    (fallbackTimezone) => {
-      expect(
-        validateDeliveryHoursDraft({ ...validDraft, fallbackTimezone }),
-      ).toEqual({
-        valid: false,
-        errors: {
-          fallbackTimezone:
-            "Select a valid IANA fallback timezone for patients without one.",
-        },
-      });
-    },
-  );
+  it.each([
+    "CST",
+    "PST",
+    "cst",
+    "pst",
+    "IST",
+    "BST",
+    "+05:30",
+    "-05:00",
+    " America/New_York",
+  ])("rejects the invalid or ambiguous timezone %s", (fallbackTimezone) => {
+    expect(
+      validateDeliveryHoursDraft({ ...validDraft, fallbackTimezone }),
+    ).toEqual({
+      valid: false,
+      errors: {
+        fallbackTimezone:
+          "Select a valid IANA fallback timezone for patients without one.",
+      },
+    });
+  });
 
   it.each([
     ["17:00", "17:00"],

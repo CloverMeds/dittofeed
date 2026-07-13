@@ -61,6 +61,7 @@ const config = {
       globalTeardown: "<rootDir>/packages/backend-lib/test/globalTeardown.ts",
       globalSetup: "<rootDir>/packages/backend-lib/test/globalSetup.ts",
       setupFilesAfterEnv: [
+        "<rootDir>/packages/backend-lib/src/jsdom-tests/setup.ts",
         "<rootDir>/packages/backend-lib/test/setup.ts",
         "<rootDir>/packages/dashboard/test/setup.ts",
         "jest-expect-message",

@@ -28,8 +28,34 @@ export const DeliveryHoursWeekdaySchema = Type.Union([
 
 const DELIVERY_TIME_PATTERN = "^(?:[01]\\d|2[0-3]):[0-5]\\d$";
 const DELIVERY_TIME_REGEXP = new RegExp(DELIVERY_TIME_PATTERN);
-const IANA_TIMEZONE_REGEXP =
-  /^(?:UTC|[A-Z][A-Za-z0-9._+-]*(?:\/[A-Z][A-Za-z0-9._+-]*)+)$/;
+const SHORT_TIMEZONE_IDENTIFIER_REGEXP = /^[A-Za-z]{2,4}$/;
+const OFFSET_TIMEZONE_REGEXP = /^[+-]/;
+
+// ICU accepts several short, ambiguous legacy aliases (for example CST and
+// PST) that are not IANA Zone or Link identifiers. Keep the actual short IANA
+// identifiers as a narrow positive list and let Intl validate every other
+// named identifier against the runtime tzdb.
+const SHORT_IANA_TIMEZONE_IDENTIFIERS = new Set([
+  "CET",
+  "CUBA",
+  "EET",
+  "EIRE",
+  "EST",
+  "GB",
+  "GMT",
+  "HST",
+  "IRAN",
+  "MET",
+  "MST",
+  "NZ",
+  "PRC",
+  "ROC",
+  "ROK",
+  "UCT",
+  "UTC",
+  "WET",
+  "ZULU",
+]);
 
 export const WorkspaceDeliveryHoursPolicy = Type.Object(
   {
@@ -109,14 +135,33 @@ export interface WorkspaceDeliveryHoursPolicyValidationResult {
   errors: WorkspaceDeliveryHoursPolicyValidationErrors;
 }
 
-export function isValidIanaTimezone(value: string): boolean {
-  if (!IANA_TIMEZONE_REGEXP.test(value)) return false;
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
-    return true;
-  } catch {
-    return false;
+/**
+ * Resolves a named IANA timezone using the runtime tzdb without rewriting the
+ * submitted identifier. Callers use the canonical result for validation only:
+ * ICU/CLDR canonical names can differ between runtimes and saved aliases must
+ * remain stable.
+ */
+export function canonicalizeIanaTimezone(value: string): string | null {
+  if (
+    !value ||
+    value !== value.trim() ||
+    OFFSET_TIMEZONE_REGEXP.test(value) ||
+    (SHORT_TIMEZONE_IDENTIFIER_REGEXP.test(value) &&
+      !SHORT_IANA_TIMEZONE_IDENTIFIERS.has(value.toUpperCase()))
+  ) {
+    return null;
   }
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: value,
+    }).resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+}
+
+export function isValidIanaTimezone(value: string): boolean {
+  return canonicalizeIanaTimezone(value) !== null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
