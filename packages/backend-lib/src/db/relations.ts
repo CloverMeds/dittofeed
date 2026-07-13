@@ -23,6 +23,7 @@ import {
   userProperty,
   userPropertyAssignment,
   workspace,
+  workspaceDeliveryHoursPolicy,
   workspaceMembeAccount,
   workspaceMember,
   workspaceMemberRole,
@@ -41,7 +42,7 @@ export const segmentIoConfigurationRelations = relations(
   }),
 );
 
-export const workspaceRelations = relations(workspace, ({ many }) => ({
+export const workspaceRelations = relations(workspace, ({ many, one }) => ({
   segmentIoConfigurations: many(segmentIoConfiguration),
   userProperties: many(userProperty),
   userPropertyAssignments: many(userPropertyAssignment),
@@ -73,6 +74,7 @@ export const workspaceRelations = relations(workspace, ({ many }) => ({
   }),
   componentConfigurations: many(componentConfiguration),
   workspaceOccupantSettings: many(workspaceOccupantSetting),
+  workspaceDeliveryHoursPolicy: one(workspaceDeliveryHoursPolicy),
 }));
 
 export const userPropertyRelations = relations(
@@ -365,6 +367,16 @@ export const workspaceOccupantSettingRelations = relations(
     secret: one(secret, {
       fields: [workspaceOccupantSetting.secretId],
       references: [secret.id],
+    }),
+  }),
+);
+
+export const workspaceDeliveryHoursPolicyRelations = relations(
+  workspaceDeliveryHoursPolicy,
+  ({ one }) => ({
+    workspace: one(workspace, {
+      fields: [workspaceDeliveryHoursPolicy.workspaceId],
+      references: [workspace.id],
     }),
   }),
 );

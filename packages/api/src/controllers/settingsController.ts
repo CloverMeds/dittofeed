@@ -6,8 +6,13 @@ import { db, upsert } from "backend-lib/src/db";
 import * as schema from "backend-lib/src/db/schema";
 import { upsertEmailProvider } from "backend-lib/src/messaging/email";
 import { upsertSmsProvider } from "backend-lib/src/messaging/sms";
+import {
+  getOrCreateWorkspaceDeliveryHoursPolicy,
+  upsertWorkspaceDeliveryHoursPolicy,
+} from "backend-lib/src/workspaceDeliveryHoursPolicy";
 import { and, eq } from "drizzle-orm";
 import { FastifyInstance } from "fastify";
+import { WorkspaceDeliveryHoursPolicyResource } from "isomorphic-lib/src/deliveryHours";
 import { unwrap } from "isomorphic-lib/src/resultHandling/resultUtils";
 import {
   BadRequestResponse,
@@ -31,8 +36,88 @@ import {
   WriteKeyResource,
 } from "isomorphic-lib/src/types";
 
+const DELIVERY_HOURS_RESOURCE_FIELDS = new Set(
+  Object.keys(WorkspaceDeliveryHoursPolicyResource.properties),
+);
+
+function hasUnsupportedDeliveryHoursFields(body: unknown): boolean {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return false;
+  }
+  return Object.keys(body).some(
+    (key) => !DELIVERY_HOURS_RESOURCE_FIELDS.has(key),
+  );
+}
+
 // eslint-disable-next-line @typescript-eslint/require-await
 export default async function settingsController(fastify: FastifyInstance) {
+  fastify.withTypeProvider<TypeBoxTypeProvider>().get(
+    "/delivery-hours",
+    {
+      schema: {
+        description: "Get the workspace patient-local delivery hours policy.",
+        tags: ["Settings"],
+        querystring: Type.Object({ workspaceId: Type.String() }),
+        response: {
+          200: WorkspaceDeliveryHoursPolicyResource,
+          404: Type.Object({ message: Type.String() }),
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await getOrCreateWorkspaceDeliveryHoursPolicy({
+        workspaceId: request.query.workspaceId,
+      });
+      if (result.isErr()) {
+        if (result.error.type === "WorkspaceNotFound") {
+          return reply.status(404).send({ message: result.error.message });
+        }
+        throw result.error;
+      }
+      return reply.status(200).send(result.value);
+    },
+  );
+
+  fastify.withTypeProvider<TypeBoxTypeProvider>().put(
+    "/delivery-hours",
+    {
+      preValidation: (request, reply, done) => {
+        if (hasUnsupportedDeliveryHoursFields(request.body)) {
+          void reply.status(400).send({
+            message: "Delivery hours request contains unsupported fields.",
+          });
+          return;
+        }
+        done();
+      },
+      schema: {
+        description:
+          "Update the workspace patient-local delivery hours policy.",
+        tags: ["Settings"],
+        body: WorkspaceDeliveryHoursPolicyResource,
+        response: {
+          200: WorkspaceDeliveryHoursPolicyResource,
+          400: Type.Object({ message: Type.String() }),
+          404: Type.Object({ message: Type.String() }),
+        },
+      },
+    },
+    async (request, reply) => {
+      const { workspaceId, ...policy } = request.body;
+      const result = await upsertWorkspaceDeliveryHoursPolicy({
+        workspaceId,
+        policy,
+      });
+      if (result.isErr()) {
+        if (result.error.type === "WorkspaceNotFound") {
+          return reply.status(404).send({ message: result.error.message });
+        }
+        return reply.status(400).send({ message: result.error.message });
+      }
+      return reply.status(200).send(result.value);
+    },
+  );
+
   fastify.withTypeProvider<TypeBoxTypeProvider>().get(
     "/data-sources",
     {
