@@ -1,4 +1,7 @@
-FROM node:20.19.5-bullseye AS builder
+ARG NODE_BUILD_IMAGE=node:20.19.5-bullseye
+ARG NODE_RUNTIME_IMAGE=node:20.19.5-bullseye-slim
+
+FROM ${NODE_BUILD_IMAGE} AS builder
 
 # Accept the build argument in the builder stage
 ARG APP_VERSION
@@ -44,7 +47,7 @@ COPY ./packages/lite/ ./packages/lite
 RUN yarn workspace lite build
 
 # Production image
-FROM node:20.19.5-bullseye-slim AS runner
+FROM ${NODE_RUNTIME_IMAGE} AS runner
 
 # Redefine the ARG in the production stage
 ARG APP_VERSION

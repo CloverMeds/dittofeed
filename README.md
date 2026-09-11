@@ -67,6 +67,15 @@ For the full dashboard experience, play around with the [demo app](https://demo.
 
 ## Docker Deployment
 
+To build and run **this checkout locally**, start Docker and run:
+
+```bash
+./scripts/local.sh up
+```
+
+Requires Bash and Docker Compose. See the [local Docker guide](docs/local-docker.md)
+for login details and start, stop, rebuild, and status commands.
+
 Check out our [walkthrough video](https://youtu.be/kZbDvVCylVg?si=Gt7xbcQ-_hk6fqKt) for an end-to-end tutorial on deploying with docker compose and automating your first message. Accompanying documentation can be found [here](https://docs.dittofeed.com/deployment/self-hosted/docker-compose).  
 
 ## Quick Deployment

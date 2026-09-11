@@ -10,6 +10,12 @@
   ],
   "scripts": {
     "admin": "yarn workspace admin-cli cli \"$@\"",
+    "local:up": "bash scripts/local.sh up",
+    "local:start": "bash scripts/local.sh start",
+    "local:down": "bash scripts/local.sh down",
+    "local:logs": "bash scripts/local.sh logs",
+    "local:status": "bash scripts/local.sh status",
+    "local:check": "bash scripts/local.sh check",
     "test:file": "./scripts/test-to-file.sh",
     "test:temporal": "jest --selectProjects backend-lib --group=temporal"
   },
